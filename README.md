@@ -1,1 +1,1 @@
-# h-m-agent
+# H&M Fashion Assistant
