@@ -1,0 +1,55 @@
+"""Neon Postgres helpers: read-only queries and the LangGraph checkpointer.
+
+Role in the system: the only module that opens database connections.
+"""
+
+import os
+from collections.abc import Generator
+from contextlib import contextmanager
+
+import psycopg
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg.rows import dict_row
+
+from hm_agent.settings import CHECKPOINT_SCHEMA
+
+
+def fetch_one(sql: str, params: tuple[str, ...]) -> tuple | None:
+    """Run a single read-only query on Neon and return the first row.
+
+    Args:
+        sql: Parameterised SQL statement (``%s`` placeholders).
+        params: Values bound to the placeholders.
+
+    Returns:
+        tuple | None: The first row, or None if the query returned no rows.
+    """
+    with psycopg.connect(os.environ["NEON_POSTGRES_CONNECTION_STRING"]) as conn:
+        conn.read_only = True
+        return conn.execute(sql, params).fetchone()
+
+
+@contextmanager
+def neon_checkpointer() -> Generator[PostgresSaver]:
+    """Open a Postgres checkpointer backed by Neon, with tables in ``checkpoints``.
+
+    The tables live in their own schema (created if missing) so they stay separate
+    from the per-agent schemas. ``setup()`` is idempotent, so it is safe on every run.
+
+    Yields:
+        PostgresSaver: Checkpointer ready to pass to ``StateGraph.compile``.
+    """
+    dsn = os.environ["NEON_POSTGRES_CONNECTION_STRING"]
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {CHECKPOINT_SCHEMA}")
+
+    # autocommit + dict_row are required by PostgresSaver; search_path routes its tables.
+    with psycopg.connect(
+        dsn,
+        autocommit=True,
+        row_factory=dict_row,
+        options=f"-c search_path={CHECKPOINT_SCHEMA}",
+    ) as conn:
+        saver = PostgresSaver(conn)
+        saver.setup()
+        yield saver

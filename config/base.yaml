@@ -1,0 +1,39 @@
+# Shared defaults for every environment. Per-environment files (dev.yaml, ...) are
+# deep-merged on top of this one; only put values there that differ.
+# Secrets (API keys, DSNs) never go in these files; they live in .env.
+
+environment: base
+
+# Groq model names per role
+llm:
+  small: openai/gpt-oss-20b
+  big: openai/gpt-oss-120b
+
+# Local embedding model (fastembed). Must match the model used to ingest the Qdrant collection.
+embedding: BAAI/bge-small-en-v1.5
+
+rag:
+  collection: troubleshooting_kb  # Qdrant collection holding the support knowledge base
+  top_k: 2                        # documents fetched per retrieval
+  max_retries: 1                  # query-rewrite retries allowed when the answer has no citation
+  min_score: 0.5                  # relevance gate: chunks scoring below this are dropped before the LLM
+  condense_history_messages: 6    # most recent messages given to the query-condensing step
+
+supervisor:
+  history_messages: 6             # most recent messages the supervisor sees when routing
+
+database:
+  checkpoint_schema: checkpoints  # Neon schema holding the LangGraph checkpoint tables
+
+defaults:
+  customer_id: cust001
+
+logging:
+  level: WARNING
+  cloudwatch:
+    enabled: false                # ship logs to AWS CloudWatch Logs (off by default: local first)
+    region: us-east-1
+    log_group: /hm-agent/base     # must match the group created in infra/cloudwatch
+
+tracing:
+  tags: [supervisor]

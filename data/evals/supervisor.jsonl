@@ -1,0 +1,9 @@
+{"id": "s01-order", "suite": "supervisor", "input": "Where is my order ORD-1007?", "expected_agents": ["order_management"], "customer_id": "cust001"}
+{"id": "s02-order-history", "suite": "supervisor", "input": "How many orders have I placed with you?", "expected_agents": ["order_management"], "customer_id": "cust001"}
+{"id": "s03-damaged", "suite": "supervisor", "input": "My jacket arrived with a torn sleeve. How do I get a replacement?", "expected_agents": ["troubleshooting"]}
+{"id": "s04-undeliverable", "suite": "supervisor", "input": "My parcel came back as undeliverable, what happens now?", "expected_agents": ["troubleshooting"]}
+{"id": "s05-both", "suite": "supervisor", "input": "Order ORD-1003 arrived damaged. What did I order and how do I return it?", "expected_agents": ["order_management", "troubleshooting"], "customer_id": "cust001"}
+{"id": "s06-greeting", "suite": "supervisor", "input": "Hi there!", "expected_agents": []}
+{"id": "s07-thanks", "suite": "supervisor", "input": "Thanks, that is all I needed.", "expected_agents": []}
+{"id": "s08-general-return-policy", "suite": "supervisor", "input": "What is your return policy for clothes I just don't like?", "expected_agents": ["troubleshooting"]}
+{"id": "s09-recommendation", "suite": "supervisor", "input": "Can you recommend a winter jacket for me?", "expected_agents": []}

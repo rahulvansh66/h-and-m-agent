@@ -1,0 +1,11 @@
+# Development overrides, merged over base.yaml (selected by APP_ENV=dev, the default).
+
+environment: dev
+
+logging:
+  level: INFO
+  cloudwatch:
+    log_group: /hm-agent/dev
+
+tracing:
+  tags: [dev, supervisor]
