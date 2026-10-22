@@ -1,0 +1,7 @@
+INFO service=a2a-launcher env=dev commit=c6b1ecc logger=__main__ agent=order_management status=started pid=21412 url=http://127.0.0.1:8001
+INFO service=a2a-launcher env=dev commit=c6b1ecc logger=__main__ agent=customer_support status=started pid=22644 url=http://127.0.0.1:8002
+INFO service=a2a-launcher env=dev commit=c6b1ecc logger=__main__ agent=out_of_scope status=started pid=22924 url=http://127.0.0.1:8003
+INFO service=a2a-launcher env=dev commit=c6b1ecc logger=__main__ agent=order_management status=ready
+INFO service=a2a-launcher env=dev commit=c6b1ecc logger=__main__ agent=customer_support status=ready
+INFO service=a2a-launcher env=dev commit=c6b1ecc logger=__main__ agent=out_of_scope status=ready
+All agents ready. Press Ctrl+C to stop.

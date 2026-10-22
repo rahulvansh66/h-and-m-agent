@@ -16,10 +16,10 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemM
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from hm_agent.llm import load_model
-from hm_agent.rag.pipeline import build_rag_graph
-from hm_agent.settings import RAG_CONDENSE_HISTORY
-from hm_agent.state import CUSTOMER_SUPPORT
+from hm_agent.core.llm import load_model
+from hm_agent.customer_support.rag.pipeline import build_rag_graph
+from hm_agent.core.settings import RAG_CONDENSE_HISTORY
+from hm_agent.core.state import CUSTOMER_SUPPORT
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,7 @@ def build_customer_support_agent() -> CompiledStateGraph:
     # claims and retry counter stay private to it.
     graph.add_node("rag", build_rag_graph())
     graph.add_node("respond", respond_node)
+    
     graph.add_edge(START, "condense_query")
     graph.add_edge("condense_query", "rag")
     graph.add_edge("rag", "respond")

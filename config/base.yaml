@@ -22,6 +22,17 @@ rag:
 supervisor:
   history_messages: 6             # most recent messages the supervisor sees when routing
 
+# A2A: each agent runs as its own HTTP service; the supervisor calls them as an A2A client.
+a2a:
+  host: 127.0.0.1                 # interface the agent services bind to and the supervisor calls
+  request_timeout_s: 90           # supervisor-side timeout for one agent call
+  history_messages: 6             # most recent prior messages sent to an agent as context
+  agents:
+    order_management:
+      port: 8001
+    customer_support:
+      port: 8002
+
 database:
   checkpoint_schema: checkpoints  # Neon schema holding the LangGraph checkpoint tables
 

@@ -5,7 +5,7 @@ Role in the system: every agent/node gets its model here, so model names stay in
 
 from langchain_groq import ChatGroq
 
-from hm_agent.config import load_config
+from hm_agent.core.config import load_config
 
 
 def load_model(size: str = "small") -> ChatGroq:

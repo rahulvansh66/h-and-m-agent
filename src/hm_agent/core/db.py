@@ -11,7 +11,7 @@ import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 
-from hm_agent.settings import CHECKPOINT_SCHEMA
+from hm_agent.core.settings import CHECKPOINT_SCHEMA
 
 
 def fetch_one(sql: str, params: tuple[str, ...]) -> tuple | None:
@@ -27,6 +27,21 @@ def fetch_one(sql: str, params: tuple[str, ...]) -> tuple | None:
     with psycopg.connect(os.environ["NEON_POSTGRES_CONNECTION_STRING"]) as conn:
         conn.read_only = True
         return conn.execute(sql, params).fetchone()
+
+
+def fetch_all(sql: str, params: tuple[object, ...]) -> list[tuple]:
+    """Run a read-only query on Neon and return every row.
+
+    Args:
+        sql: Parameterised SQL statement (``%s`` placeholders).
+        params: Values bound to the placeholders.
+
+    Returns:
+        list[tuple]: All rows (empty list if the query returned none).
+    """
+    with psycopg.connect(os.environ["NEON_POSTGRES_CONNECTION_STRING"]) as conn:
+        conn.read_only = True
+        return conn.execute(sql, params).fetchall()
 
 
 @contextmanager

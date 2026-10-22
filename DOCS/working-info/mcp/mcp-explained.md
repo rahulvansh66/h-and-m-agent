@@ -69,7 +69,7 @@ MCP defines the message format; a *transport* carries it.
 * **stdio** (what we use): the client starts the server as a child process, writes JSON lines
   to the server's stdin and reads JSON lines from its stdout. No network, no port, no auth.
   That is why **stdout is reserved for the protocol** and logs must go to stderr
-  (see `main()` in `mcp_servers/order_management.py`).
+  (see `main()` in `order_management/mcp_server.py`).
 * **Streamable HTTP**: the server is a long-running web service; messages are HTTP POSTs. This
   is the transport for shared, remote, multi-user servers.
 
@@ -123,20 +123,20 @@ MCP names three roles. Note that the **LLM is not one of them**: it never speaks
 |                                         |                                             |
 |                                tool call chosen by the LLM                            |
 |                                         v                                             |
-|                      CLIENT: MultiServerMCPClient (mcp_client.py)                     |
+|                      CLIENT: MultiServerMCPClient (order_management/mcp_client.py)                     |
 |                      + inject_customer_id interceptor                                 |
 +-----------------------------------------|---------------------------------------------+
                                           |  JSON-RPC lines over stdio pipes
                                           v
-                  SERVER: python -m hm_agent.mcp_servers.order_management
+                  SERVER: python -m hm_agent.order_management.mcp_server
                           (FastMCP, separate process) -> Neon Postgres
 ```
 
 | Role | In this project | Responsibility |
 |---|---|---|
 | **Host** | The `hm_agent` application (CLI + LangGraph + the LLM) | Owns the user conversation and the model; decides *whether* a tool call is allowed and with *which* arguments. |
-| **Client** | `MultiServerMCPClient` from `langchain-mcp-adapters`, configured in `mcp_client.py` | One client per server connection. Speaks the protocol, turns MCP tools into LangChain tools, runs our interceptor. |
-| **Server** | `mcp_servers/order_management.py` (`FastMCP("order-management")`) | Declares tools, runs them, returns results. Knows nothing about the LLM or the conversation. |
+| **Client** | `MultiServerMCPClient` from `langchain-mcp-adapters`, configured in `order_management/mcp_client.py` | One client per server connection. Speaks the protocol, turns MCP tools into LangChain tools, runs our interceptor. |
+| **Server** | `order_management/mcp_server.py` (`FastMCP("order-management")`) | Declares tools, runs them, returns results. Knows nothing about the LLM or the conversation. |
 
 How the pieces cooperate for one question:
 
@@ -215,7 +215,36 @@ Like a request but **no `id`**, so no reply is ever sent. Example:
 
 **`notifications/initialized`**: the client's "handshake accepted, I'm ready". No reply.
 
-**`tools/list` result**: one entry per tool:
+**`tools/list` request** (client to server, right after `notifications/initialized`). It has no
+`params`; the client simply asks "what tools do you have?":
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+```
+
+**`tools/list` result** (server to client), shown for our two tools:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"tools":[
+  {"name":"get_last_bought_product",
+   "description":"Get the product name of the last item a customer bought.\n\n    Args:\n        customer_id: Id of the customer, e.g. ``cust001``.\n\n    Returns:\n        str: The product name, or a message saying no purchases were found.\n    ",
+   "inputSchema":{"properties":{"customer_id":{"title":"Customer Id","type":"string"}},
+                  "required":["customer_id"],
+                  "title":"get_last_bought_productArguments","type":"object"},
+   "outputSchema":{"properties":{"result":{"title":"Result","type":"string"}},
+                   "required":["result"],
+                   "title":"get_last_bought_productOutput","type":"object"}},
+  {"name":"get_purchase_count",
+   "description":"Get the total number of items a customer has purchased.\n\n    Args:\n        customer_id: Id of the customer, e.g. ``cust001``.\n\n    Returns:\n        str: The purchase count as text.\n    ",
+   "inputSchema":{"properties":{"customer_id":{"title":"Customer Id","type":"string"}},
+                  "required":["customer_id"],
+                  "title":"get_purchase_countArguments","type":"object"},
+   "outputSchema":{"properties":{"result":{"title":"Result","type":"string"}},
+                   "required":["result"],
+                   "title":"get_purchase_countOutput","type":"object"}}]}}
+```
+
+Each entry has:
 
 | Field | Meaning |
 |---|---|
@@ -224,7 +253,14 @@ Like a request but **no `id`**, so no reply is ever sent. Example:
 | `inputSchema` | JSON Schema of the arguments (types, `required`). Generated from the type hints. |
 | `outputSchema` | JSON Schema of `structuredContent`. Here `{"result": string}` because the function returns `str`. |
 
-**`tools/call` request** `params`:
+**`tools/call` request** (client to server), as logged for `get_last_bought_product`:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call",
+ "params":{"name":"get_last_bought_product","arguments":{"customer_id":"cust001"}}}
+```
+
+The `params` fields:
 
 | Field | Meaning |
 |---|---|
@@ -411,3 +447,59 @@ you don't leak orphan servers.
 - [ ] `readOnlyHint` set; tool descriptions written for the model
 - [ ] `mcp` and adapter versions pinned; tool contract changes reviewed
 - [ ] Only trusted servers connected; results from untrusted sources treated as untrusted
+
+---
+
+## 9. Sharing the tools with other teams: hosted server or shared code?
+
+**Recommendation: other teams call your hosted MCP server. Do not hand them the code to run
+their own copy.** This is the usual pattern in companies.
+
+### 9.1 Why a shared, hosted server wins
+
+| Reason | Detail |
+|---|---|
+| **One source of truth** | A tool fix, schema change or business-rule update ships once. Separate copies drift, and you end up debugging versions you don't control. |
+| **Data access stays with the owner** | Only your service holds the Neon credentials. If you give out the code, every team needs DB credentials and the "no cross-schema access, agents stay independent" boundary is gone. |
+| **Central security and governance** | Authentication, per-team permissions, rate limits, audit logs and PII masking live in one place. Copies cannot be governed. |
+| **Cost and ops** | One deployment makes Groq, Neon and AWS usage easy to see and cap, and monitoring and on-call stay in one place. |
+| **Fits what MCP's remote transport is for** | Streamable HTTP lets many clients, in any language or framework, use the same tools. stdio (section 1) is one client per child process and suits local use, not cross-team sharing. |
+
+### 9.2 When sharing code does make sense
+
+* **A library, not a server.** Pure logic with no secrets or shared data (formatting helpers,
+  validators) can be an internal package.
+* **Strict isolation.** Regulatory or network boundaries, or a team that needs different data or
+  tenants, can justify a separate deployment. Deploy it from your repo and image, not a forked copy.
+* **Local development.** Teams may run the server locally over stdio against the **test** database.
+
+### 9.3 What the real-world setup looks like
+
+1. Deploy each MCP server over streamable HTTP behind an API gateway or load balancer. Prefer a
+   pay-per-use option (e.g. Lambda) over always-on resources, per the cost rules in `CLAUDE.md`.
+2. Authenticate every caller (OAuth 2.1 bearer tokens per the HTTP transport spec, API keys or IAM)
+   and scope tools by role, e.g. a read-only team gets only read tools.
+3. **Derive identity from the token, not from an argument.** Today the server trusts the
+   `customer_id` it receives (section 8.2). That is safe over stdio but not over HTTP, so a shared
+   server must resolve the customer or tenant from the authenticated context.
+4. Treat tool names and schemas as a **versioned public API**: no breaking changes without a
+   deprecation window (section 8.7).
+5. Publish a tool catalog with example calls, and register the server in an internal MCP registry if
+   the company has one so teams can discover it.
+6. Add rate limits, structured logs carrying a caller/team id and the correlation id from
+   section 8.8, and per-team usage metrics.
+
+### 9.4 What this means for this repo
+
+Keep one server per domain (order management, product recommendation, personalization) as separate
+deployables, each exposed over authenticated HTTP. A consuming team then gets only the domain it
+needs. Moving from stdio to HTTP is the main change required, and the auth item in 9.3 must land
+with it, not after.
+
+### 9.5 Cross-team checklist
+- [ ] Servers run over streamable HTTP, deployed from this repo (no forked copies)
+- [ ] Every caller authenticated; tools scoped per team or role
+- [ ] Customer or tenant identity derived from the token, not a tool argument
+- [ ] Tool contract versioned, with a deprecation policy
+- [ ] Tool catalog / docs published for consumers
+- [ ] Per-team rate limits, logs and usage metrics

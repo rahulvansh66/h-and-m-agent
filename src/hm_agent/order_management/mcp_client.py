@@ -1,7 +1,7 @@
 """MCP client: loads the order management tools from their MCP server as LangChain tools.
 
 Role in the system: bridge between the order_management agent and its MCP server
-(``hm_agent.mcp_servers.order_management``). Two things happen here beyond plain loading:
+(``hm_agent.order_management.mcp_server``). Two things happen here beyond plain loading:
 
 * the ``customer_id`` argument is hidden from the model's tool schema, and
 * an interceptor overwrites it on every call with the id from the run config,
@@ -19,7 +19,7 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
 
-from hm_agent.settings import DEFAULT_CUSTOMER_ID
+from hm_agent.core.settings import DEFAULT_CUSTOMER_ID
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,8 @@ def load_order_tools() -> list[BaseTool]:
     stdio subprocess for each tool call, so nothing stays running between calls.
 
     Returns:
-        list[BaseTool]: Sync-callable tools ``get_last_bought_product`` and ``get_purchase_count``.
+        list[BaseTool]: Sync-callable tools ``get_last_bought_product``, ``get_purchase_count``,
+            ``list_orders`` and ``get_order_details``.
     """
     env = {key: os.environ[key] for key in FORWARDED_ENV if key in os.environ}
     client = MultiServerMCPClient(
@@ -105,7 +106,7 @@ def load_order_tools() -> list[BaseTool]:
             ORDER_SERVER: {
                 "transport": "stdio",
                 "command": sys.executable,
-                "args": ["-m", "hm_agent.mcp_servers.order_management"],
+                "args": ["-m", "hm_agent.order_management.mcp_server"],
                 "env": env,
             }
         },

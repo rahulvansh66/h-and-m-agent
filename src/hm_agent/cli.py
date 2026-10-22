@@ -27,10 +27,10 @@ from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 from langgraph.graph.state import CompiledStateGraph
 
-from hm_agent.db import neon_checkpointer
+from hm_agent.core.db import neon_checkpointer
 from hm_agent.graph import build_graph
-from hm_agent.logging_setup import configure_logging
-from hm_agent.settings import DEFAULT_CUSTOMER_ID, REPO_ROOT, TRACING_TAGS
+from hm_agent.core.logging_setup import configure_logging
+from hm_agent.core.settings import DEFAULT_CUSTOMER_ID, REPO_ROOT, TRACING_TAGS
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 """Qdrant retriever: embeds a query locally and returns the closest knowledge-base chunks.
 
-Role in the system: the retrieval step of the agentic RAG pipeline (``hm_agent.rag.pipeline``).
+Role in the system: the retrieval step of the agentic RAG pipeline (``hm_agent.customer_support.rag.pipeline``).
 The only module that talks to Qdrant.
 """
 
@@ -11,8 +11,8 @@ from functools import cache
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 
-from hm_agent.config import load_config
-from hm_agent.settings import RAG_COLLECTION, RAG_TOP_K
+from hm_agent.core.config import load_config
+from hm_agent.core.settings import RAG_COLLECTION, RAG_TOP_K
 
 logger = logging.getLogger(__name__)
 

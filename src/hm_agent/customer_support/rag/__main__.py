@@ -1,7 +1,7 @@
 """Command-line entry point for the agentic RAG pipeline.
 
 Run (from the repo root):
-    uv run python -m hm_agent.rag "What happens if my package can't be delivered?"
+    uv run python -m hm_agent.customer_support.rag "What happens if my package can't be delivered?"
 
 Needs GROQ_API_KEY, QDRANT_ENDPOINT and QDRANT_API_KEY in ``.env``.
 """
@@ -11,9 +11,9 @@ import sys
 
 from dotenv import load_dotenv
 
-from hm_agent.logging_setup import configure_logging
-from hm_agent.rag.pipeline import build_rag_graph
-from hm_agent.settings import REPO_ROOT
+from hm_agent.core.logging_setup import configure_logging
+from hm_agent.customer_support.rag.pipeline import build_rag_graph
+from hm_agent.core.settings import REPO_ROOT
 
 
 def main() -> None:

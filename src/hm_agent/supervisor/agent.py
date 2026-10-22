@@ -2,16 +2,18 @@
 
 Role in the system: first node of the graph; its decision drives the conditional edge. It is
 the only place that decides scope, so sub-agents can assume the messages they get are theirs.
-Messages no agent handles go to the ``out_of_scope`` node defined here.
+Messages no agent handles are routed to the local ``out_of_scope`` node, which returns the fixed
+reply (``OUT_OF_SCOPE_REPLY``) defined here. It is not an A2A agent: it has no LLM, tools or data.
 """
 
 import logging
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 
-from hm_agent.llm import load_model
-from hm_agent.settings import SUPERVISOR_HISTORY
-from hm_agent.state import (
+from hm_agent.core.llm import load_model
+from hm_agent.core.settings import SUPERVISOR_HISTORY
+from hm_agent.core.state import (
     DEFAULT_AGENT,
     OUT_OF_SCOPE,
     AgentName,
@@ -117,16 +119,21 @@ def route_to_agent(state: AgentState) -> AgentName:
     return state["next_agent"]
 
 
-def out_of_scope_node(state: AgentState) -> dict:
-    """Reply with a fixed message when no agent can handle the request.
+def out_of_scope_node(state: AgentState, config: RunnableConfig) -> dict:
+    """Reply with the fixed decline message when no agent can handle the request.
 
-    Reads: nothing. Writes: ``messages`` (one AI reply).
+    Runs inside the supervisor graph (no A2A call, no LLM), so a decline is instant and cannot
+    fail because a remote service is down.
+
+    Reads: nothing. Writes: ``messages`` (one AI reply named ``out_of_scope``).
 
     Args:
-        state: Current graph state.
+        state (AgentState): Current graph state (unused).
+        config (RunnableConfig): Run config; only ``thread_id`` is read, for logging.
 
     Returns:
-        dict: ``{"messages": [AIMessage]}`` with the out-of-scope reply.
+        dict: ``{"messages": [AIMessage]}`` carrying ``OUT_OF_SCOPE_REPLY``.
     """
-    logger.info("node=out_of_scope status=complete")
+    thread_id = config.get("configurable", {}).get("thread_id", "")
+    logger.info("node=%s status=declined thread_id=%s", OUT_OF_SCOPE, thread_id)
     return {"messages": [AIMessage(OUT_OF_SCOPE_REPLY, name=OUT_OF_SCOPE)]}

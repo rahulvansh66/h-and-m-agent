@@ -21,9 +21,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
-from hm_agent.llm import load_model
-from hm_agent.rag.retriever import retrieve
-from hm_agent.settings import RAG_MAX_RETRIES, RAG_MIN_SCORE
+from hm_agent.core.llm import load_model
+from hm_agent.customer_support.rag.retriever import retrieve
+from hm_agent.core.settings import RAG_MAX_RETRIES, RAG_MIN_SCORE
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +236,7 @@ def build_rag_graph() -> CompiledStateGraph:
     graph.add_node("generate", generate_node)
     graph.add_node("rewrite_query", rewrite_query_node)
     graph.add_node("finalize", finalize_node)
+    
     graph.add_edge(START, "retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_conditional_edges("generate", route_after_generate)

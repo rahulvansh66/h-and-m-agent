@@ -2,8 +2,8 @@
 
 Role in the system: sub-agent used directly as a node of the supervisor graph. The supervisor
 routes questions about the customer's own orders and purchases here. The agent answers only
-through its tools (last purchase, purchase count), which are served by an MCP server
-(``hm_agent.mcp_servers.order_management``), so order data is never guessed. It is built
+through its tools (last purchase, purchase count, order list, order details), which are served by an MCP server
+(``hm_agent.order_management.mcp_server``), so order data is never guessed. It is built
 with ``create_agent``, which already returns a compiled graph that reads and writes ``messages``,
 so no custom ``StateGraph`` is needed.
 """
@@ -11,9 +11,9 @@ so no custom ``StateGraph`` is needed.
 from langchain.agents import create_agent
 from langgraph.graph.state import CompiledStateGraph
 
-from hm_agent.llm import load_model
-from hm_agent.mcp_client import load_order_tools
-from hm_agent.state import ORDER_MANAGEMENT
+from hm_agent.core.llm import load_model
+from hm_agent.order_management.mcp_client import load_order_tools
+from hm_agent.core.state import ORDER_MANAGEMENT
 
 ORDER_MANAGEMENT_PROMPT = """\
 # ROLE
@@ -24,8 +24,11 @@ purchases using read-only database tools.
 Answer the customer's question about their order history by calling the available tools:
 - get_last_bought_product: the product name of the customer's most recent purchase.
 - get_purchase_count: how many items the customer has purchased in total.
+- list_orders: the customer's recent orders (id, date, sales channel, item count).
+- get_order_details: the date, sales channel and items of one order, given its order id.
 
 # RULES
+- If the customer asks about an order without giving its id, call list_orders first.
 - Use a tool for every factual claim; never guess or invent order data.
 - The customer is already identified by the system; never ask for or accept another customer id.
 - If a tool returns no data, say that no purchases were found.
@@ -44,7 +47,7 @@ def build_order_agent() -> CompiledStateGraph:
     sync tools, so the agent runs with plain ``invoke``/``stream``.
 
     Returns:
-        CompiledStateGraph: Agent named ``order_management`` with the two MCP order tools.
+        CompiledStateGraph: Agent named ``order_management`` with the four MCP order tools.
     """
     return create_agent(
         load_model("small"),

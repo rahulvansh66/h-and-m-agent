@@ -1,0 +1,43 @@
+# Langfuse observations for session d4874bd8-83d5-4a82-91e1-8353dbe167d2 (v2 observations API, filtered client-side by sessionId)
+
+trace eb757977ccde9d667b7215866bf701f7 start=2026-10-19T06:11:31.933Z
+  CHAIN      hm-supervisor                latency_s=22.58 user=cust001 model=
+    CHAIN      supervisor                   latency_s=3.516 user=cust001 model=
+    CHAIN      RunnableSequence             latency_s=0.997 user=cust001 model=
+    GENERATION ChatGroq                     latency_s=0.988 user=cust001 model=openai/gpt-oss-20b
+    CHAIN      PydanticToolsParser          latency_s=0 user=cust001 model=
+    AGENT      route_to_agent               latency_s=0.002 user=cust001 model=
+    CHAIN      order_management             latency_s=17.709 user=cust001 model=
+
+trace 7890d42e0f3ddf2732f77fe83ad53ee2 start=2026-10-19T06:11:39.696Z
+  CHAIN      a2a-order_management         latency_s=13.507 user=cust001 model=
+    CHAIN      model                        latency_s=1.344 user=cust001 model=
+    GENERATION ChatGroq                     latency_s=1.335 user=cust001 model=openai/gpt-oss-20b
+    CHAIN      tools                        latency_s=10.398 user=cust001 model=
+    TOOL       get_last_bought_product      latency_s=10.379 user=cust001 model=
+    CHAIN      model                        latency_s=1.753 user=cust001 model=
+    GENERATION ChatGroq                     latency_s=1.745 user=cust001 model=openai/gpt-oss-20b
+
+trace 3913e1529238f2ba53eb7f9de0b84aa7 start=2026-10-19T06:11:54.515Z
+  CHAIN      hm-supervisor                latency_s=19.635 user=cust001 model=
+    CHAIN      supervisor                   latency_s=2.917 user=cust001 model=
+    CHAIN      RunnableSequence             latency_s=0.761 user=cust001 model=
+    GENERATION ChatGroq                     latency_s=0.754 user=cust001 model=openai/gpt-oss-20b
+    CHAIN      PydanticToolsParser          latency_s=0 user=cust001 model=
+    AGENT      route_to_agent               latency_s=0.008 user=cust001 model=
+    CHAIN      customer_support             latency_s=15.388 user=cust001 model=
+
+trace d5408c8d82ccdd2316ca3c36f269ec08 start=2026-10-19T06:12:01.445Z
+  CHAIN      a2a-customer_support         latency_s=11.573 user=cust001 model=
+    CHAIN      condense_query               latency_s=4.472 user=cust001 model=
+    GENERATION ChatGroq                     latency_s=1.815 user=cust001 model=openai/gpt-oss-20b
+    CHAIN      LangGraph                    latency_s=7.061 user=cust001 model=
+    CHAIN      rag                          latency_s=7.077 user=cust001 model=
+    CHAIN      retrieve                     latency_s=3.675 user=cust001 model=
+    CHAIN      generate                     latency_s=3.378 user=cust001 model=
+    CHAIN      RunnableSequence             latency_s=1.188 user=cust001 model=
+    GENERATION ChatGroq                     latency_s=1.177 user=cust001 model=openai/gpt-oss-20b
+    CHAIN      PydanticToolsParser          latency_s=0.004 user=cust001 model=
+    CHAIN      finalize                     latency_s=0 user=cust001 model=
+    CHAIN      route_after_generate         latency_s=0 user=cust001 model=
+    CHAIN      respond                      latency_s=0.006 user=cust001 model=

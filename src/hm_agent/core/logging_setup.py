@@ -13,7 +13,7 @@ import subprocess
 import boto3
 import watchtower
 
-from hm_agent.config import REPO_ROOT, load_config
+from hm_agent.core.config import REPO_ROOT, load_config
 
 logger = logging.getLogger(__name__)
 

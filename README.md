@@ -45,6 +45,15 @@ embedded with `BAAI/bge-small-en-v1.5`. This repo does not yet include an ingest
 
 ## Usage
 
+The supervisor reaches each agent over A2A, so start the agent services first (one process each,
+ports in `config/base.yaml`) in a separate terminal and leave them running:
+
+```bash
+uv run python scripts/a2a/run_agents.py
+```
+
+How it works and a real session walkthrough: `DOCS/working-info/a2a/`.
+
 ### Interactive chat (continuous conversation)
 
 Run without a query to chat over many turns in one session. Every message uses the same
@@ -84,7 +93,7 @@ If you build an API or UI on top, keep one stable `thread_id` per conversation a
 ### RAG pipeline on its own
 
 ```bash
-uv run python -m hm_agent.rag "What happens if my package can't be delivered?"
+uv run python -m hm_agent.customer_support.rag "What happens if my package can't be delivered?"
 ```
 
 ## Configuration
@@ -106,13 +115,13 @@ Secrets never go in the YAML files; they live in `.env`.
 src/hm_agent/
   cli.py            CLI entry point (single query and chat loop)
   graph.py          Supervisor graph assembly
-  agents/           supervisor, order_management, customer_support
-  rag/              Retriever and agentic RAG pipeline
-  mcp_servers/      MCP server with read-only order SQL tools
-  mcp_client.py     Loads MCP tools and injects customer_id
-  db.py             Neon helpers and the Postgres checkpointer
+  core/             Shared config, settings, LLM factory, logging, db and graph state
+  supervisor/       Routes each request to a specialist agent
+  order_management/ Agent, MCP server and client (injects customer_id), A2A service
+  customer_support/ Agent, RAG pipeline (rag/), A2A service
+  a2a/              Generic A2A server, client, cards and supervisor remote node
 config/             base.yaml, dev.yaml
-scripts/            Database creation and query scripts
+scripts/            Database creation and query scripts, and a2a/run_agents.py (starts both agent services)
 DOCS/               Data documentation and code-reading guide
 ```
 
