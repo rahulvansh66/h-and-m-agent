@@ -1,8 +1,0 @@
-thread_id: 0dc2fe6a-f4cc-4691-a9ba-6b22fdc64563
-next_agent (last routing decision): shipment_tracking
-1. HumanMessage name=None               What was the last item I bought?
-2. AIMessage    name=order_management   Your most recent purchase was a **Berry Tee**.
-3. HumanMessage name=None               Was that one bought online or in a store?
-4. AIMessage    name=order_management   It was purchased online.
-5. HumanMessage name=None               Where is my order ORD-1007?
-6. AIMessage    name=shipment_tracking  Order ORD-1007 is with DHL Express (tracking DHL4966249063). Last scan: Hamburg sorting hub. In transit, expected delivery in 2 days.

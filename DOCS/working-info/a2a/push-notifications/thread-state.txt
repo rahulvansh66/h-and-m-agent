@@ -1,7 +1,0 @@
-Saved messages of thread 9d9db403-8f2d-432d-a18b-824e35a8678b after the session (read back from the Neon checkpointer):
-
-HumanMessage None | Where is my order ORD-1007?
-AIMessage shipment_tracking | I'm checking with the carrier now. This can take a little while; I'll post the result here...
-HumanMessage None | How many purchases have I made?
-AIMessage order_management | You've bought a total of 9 items so far.
-AIMessage shipment_tracking | Order ORD-1007 is with DHL Express (tracking DHL4966249063). Last scan: Hamburg sorting hub...
