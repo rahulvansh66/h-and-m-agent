@@ -1,7 +1,7 @@
 # H&M Fashion Assistant
 
-A supervisor multi-agent assistant for H&M customers, built with LangGraph. A supervisor reads each
-message and routes it to one of three sub-agents, or politely declines if it is out of scope. The agents
+A multi-agent assistant for H&M, built with LangGraph. A supervisor reads each
+message and routes it to one of three sub-agents. The agents
 run as separate A2A services, and a FastAPI layer exposes the assistant over HTTP with streaming.
 
 ```
