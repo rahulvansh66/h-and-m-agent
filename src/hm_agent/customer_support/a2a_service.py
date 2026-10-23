@@ -20,7 +20,13 @@ def main() -> None:
     """Start the customer support agent service on its configured port."""
     load_dotenv(REPO_ROOT / ".env")
     configure_logging(f"a2a-{CUSTOMER_SUPPORT}")
-    runner = graph_runner(build_customer_support_agent(), CUSTOMER_SUPPORT)
+    # The answer is generated as structured output and checked for citations (and possibly retried), so
+    # it is sent whole once validated; only step progress is streamed.
+    runner = graph_runner(
+        build_customer_support_agent(),
+        CUSTOMER_SUPPORT,
+        progress_labels={"condense_query": "Understood your question", "rag": "Searched the help articles"},
+    )
     uvicorn.run(build_a2a_app(build_agent_card(CUSTOMER_SUPPORT), CUSTOMER_SUPPORT, runner), host=A2A_HOST, port=agent_port(CUSTOMER_SUPPORT), log_level="info")
 
 

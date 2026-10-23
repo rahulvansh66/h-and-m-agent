@@ -24,8 +24,8 @@ from hm_agent.core.state import (
 logger = logging.getLogger(__name__)
 
 OUT_OF_SCOPE_REPLY = (
-    "I can help with questions about your orders and purchases, and about damaged or "
-    "defective items. For anything else, please contact H&M customer service."
+    "I can help with questions about your orders and purchases, where your parcel is, and "
+    "damaged or defective items. For anything else, please contact H&M customer service."
 )
 
 SUPERVISOR_PROMPT = """\
@@ -37,6 +37,8 @@ you only decide which specialist agent should handle the latest customer message
 You are given the recent conversation. Choose exactly one agent for the latest customer message:
 - order_management: questions about the customer's own orders or purchases
   (what they bought, last purchase, how many purchases, order history).
+- shipment_tracking: where an order or parcel is right now, shipping or delivery status,
+  carrier and tracking questions.
 - customer_support: anything about damaged, defective, broken or faulty items, and what to do
   about them (returns, replacements, refunds, contacting a seller, proof, timelines).
 - out_of_scope: anything else (general chat, product advice, unrelated topics).
@@ -47,11 +49,12 @@ You are given the recent conversation. Choose exactly one agent for the latest c
   shown as "Assistant (<agent>)", unless the customer clearly changed topic.
 - If the message mentions a damaged or defective item, choose customer_support.
 - If the message is about order or purchase information, choose order_management.
+- If the message is about where an order is or when it arrives, choose shipment_tracking.
 - If it fits no agent, choose out_of_scope. If it is only unclear, prefer customer_support.
 - Never invent another agent name.
 
 # OUTPUT
-Return the structured fields only: `agent` (order_management | customer_support | out_of_scope)
+Return the structured fields only: `agent` (order_management | customer_support | shipment_tracking | out_of_scope)
 and `reason` (one short sentence).
 """
 
@@ -108,7 +111,7 @@ def route_to_agent(state: AgentState) -> AgentName:
     """Conditional edge: send the run to the agent the supervisor chose.
 
     Reads: ``next_agent``. Writes: nothing.
-    Possible next nodes: ``order_management``, ``customer_support``, ``out_of_scope``.
+    Possible next nodes: ``order_management``, ``customer_support``, ``shipment_tracking``, ``out_of_scope``.
 
     Args:
         state: Current graph state.

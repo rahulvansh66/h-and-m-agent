@@ -22,6 +22,14 @@ TRACING_TAGS = _CONFIG["tracing"]["tags"]
 A2A_HOST = _CONFIG["a2a"]["host"]  # interface the agent services bind to
 A2A_TIMEOUT_S = _CONFIG["a2a"]["request_timeout_s"]  # supervisor-side timeout per agent call
 A2A_HISTORY = _CONFIG["a2a"]["history_messages"]  # prior messages sent to an agent as context
+A2A_WEBHOOK_PORT = _CONFIG["a2a"]["webhook_port"]  # port of the supervisor's push-notification receiver
+SHIPMENT_CARRIER_DELAY_S = _CONFIG["shipment"]["carrier_delay_s"]  # simulated carrier lookup time
+API_HOST = _CONFIG["api"]["host"]  # interface the FastAPI app binds to
+API_PORT = _CONFIG["api"]["port"]
+API_CORS_ORIGINS = _CONFIG["api"]["cors_origins"]
+API_MAX_MESSAGE_CHARS = _CONFIG["api"]["max_message_chars"]
+API_RATE_LIMIT_PER_MIN = _CONFIG["api"]["rate_limit_per_min"]
+API_POOL_MAX_SIZE = _CONFIG["api"]["pool_max_size"]
 A2A_PORTS = {name: spec["port"] for name, spec in _CONFIG["a2a"]["agents"].items()}  # agent name -> port
 
 
@@ -69,6 +77,14 @@ __all__ = [
     "A2A_HOST",
     "A2A_TIMEOUT_S",
     "A2A_HISTORY",
+    "A2A_WEBHOOK_PORT",
+    "SHIPMENT_CARRIER_DELAY_S",
+    "API_HOST",
+    "API_PORT",
+    "API_CORS_ORIGINS",
+    "API_MAX_MESSAGE_CHARS",
+    "API_RATE_LIMIT_PER_MIN",
+    "API_POOL_MAX_SIZE",
     "A2A_PORTS",
     "agent_port",
     "agent_url",

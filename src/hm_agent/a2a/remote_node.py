@@ -3,6 +3,11 @@
 Role in the system: replaces the in-process agent subgraphs. The node sends the latest customer
 message (plus a short history window) to the agent service and appends the reply as an AI message
 named after the agent, which is the label the supervisor uses to keep follow-ups with that agent.
+The call is streamed: progress lines and answer pieces are forwarded to the graph's ``custom`` stream
+as they arrive (so a caller using ``graph.stream`` can show them live) and the full reply is still
+returned as one message. For agents that also support push notifications the webhook is registered
+as a fallback: if the stream breaks before the task ends, the node returns an acknowledgement and the
+real answer is added to the thread later by the push receiver.
 """
 
 import logging
@@ -11,31 +16,37 @@ from collections.abc import Callable
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_stream_writer
 
-from hm_agent.a2a.client import call_remote_agent
+from hm_agent.a2a.client import stream_remote_agent
+from hm_agent.a2a.push_receiver import COMPLETED_STATE, PendingTask, get_receiver
 from hm_agent.core.settings import A2A_HISTORY, A2A_TIMEOUT_S, agent_url
 from hm_agent.core.state import AgentState
 
 logger = logging.getLogger(__name__)
 
 UNAVAILABLE_REPLY = "Sorry, I can't answer that right now. Please try again in a moment."
+PENDING_REPLY = "I'm checking with the carrier now. This can take a little while; I'll post the result here as soon as it arrives."
 
 
 def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig], dict]:
-    """Create a graph node that calls the A2A agent ``agent``.
+    """Create a graph node that calls the A2A agent ``agent`` over a streaming connection.
 
     Args:
         agent (str): Agent name; also the AI message name and the key of its URL setting.
 
     Returns:
-        Callable[[AgentState, RunnableConfig], dict]: Node reading ``messages`` and writing one AI message.
+        Callable[[AgentState, RunnableConfig], dict]: Node reading ``messages`` and writing one AI reply.
     """
 
     def node(state: AgentState, config: RunnableConfig) -> dict:
-        """Call the remote agent for the latest customer message.
+        """Call the remote agent for the latest customer message and stream its output.
 
-        If the agent is unreachable or its task fails, a generic apology is returned instead of
-        raising, so one broken agent does not crash the conversation.
+        Custom stream events (``{"type": "started" | "progress" | "token", "agent", ...}``) are
+        written for each event the agent sends. If the agent is unreachable or its task fails, a
+        generic apology is returned instead of raising, so one broken agent does not crash the
+        conversation. If the stream breaks while a push-registered task is still running, the task
+        is handed to the push receiver and an acknowledgement is returned.
 
         Reads: ``messages``. Writes: ``messages`` (one AI reply).
 
@@ -55,13 +66,42 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
             {"role": "user" if isinstance(m, HumanMessage) else "assistant", "text": m.text, "name": m.name}
             for m in messages[:-1][-A2A_HISTORY:]
         ]
+        writer = get_stream_writer()
+        receiver = get_receiver()
+        url = agent_url(agent)
+        task_id, push_registered, terminal, pieces = "", False, "", []
         start = time.perf_counter()
         try:
-            reply = call_remote_agent(agent_url(agent), latest, history, customer_id, thread_id, A2A_TIMEOUT_S)
-            logger.info("node=%s status=complete thread_id=%s duration_s=%.2f", agent, thread_id, time.perf_counter() - start)
+            events = stream_remote_agent(
+                url, latest, history, customer_id, thread_id, A2A_TIMEOUT_S, push=receiver.target if receiver else None
+            )
+            for event in events:
+                if event.kind == "started":
+                    task_id, push_registered = event.task_id, event.push_registered
+                    writer({"type": "started", "agent": agent, "task_id": task_id})
+                elif event.kind == "progress":
+                    writer({"type": "progress", "agent": agent, "text": event.text})
+                elif event.kind == "answer":
+                    pieces.append(event.text)
+                    writer({"type": "token", "agent": agent, "text": event.text})
+                else:
+                    terminal = event.state
+            if terminal != COMPLETED_STATE:
+                raise RuntimeError(f"task {task_id} ended in state {terminal or 'unknown'}")
+            reply, status = "".join(pieces), "complete"
         except Exception:
-            logger.exception("node=%s status=remote_failed thread_id=%s duration_s=%.2f", agent, thread_id, time.perf_counter() - start)
-            reply = UNAVAILABLE_REPLY
+            if task_id and push_registered and not terminal and receiver is not None:
+                # Stream lost but the task may still be running: the webhook will report its result.
+                logger.warning("node=%s status=stream_lost thread_id=%s task_id=%s fallback=push", agent, thread_id, task_id)
+                receiver.register(PendingTask(task_id, agent, url, customer_id, thread_id))
+                reply, status = PENDING_REPLY, "pending"
+            else:
+                logger.exception("node=%s status=remote_failed thread_id=%s", agent, thread_id)
+                reply, status = UNAVAILABLE_REPLY, "failed"
+        if task_id and push_registered and terminal and receiver is not None:
+            # The result came through the stream; ignore the webhook notifications that follow.
+            receiver.mark_streamed(task_id)
+        logger.info("node=%s status=%s thread_id=%s duration_s=%.2f", agent, status, thread_id, time.perf_counter() - start)
         return {"messages": [AIMessage(reply, name=agent)]}
 
     return node

@@ -50,14 +50,68 @@ async def _log_request(request: httpx.Request) -> None:
     _write_wire("C->S", f"{request.method} {request.url}", request.content.decode("utf-8", "replace"))
 
 
+class _SseLoggingStream(httpx.AsyncByteStream):
+    """Response body wrapper that logs each Server-Sent-Events ``data:`` line as it streams past.
+
+    The bytes are passed on untouched and immediately, so the caller still sees events live.
+    """
+
+    def __init__(self, inner: httpx.AsyncByteStream, url: str, status: int) -> None:
+        """Wrap a response body stream.
+
+        Args:
+            inner (httpx.AsyncByteStream): The original body stream.
+            url (str): URL of the response, recorded with each event.
+            status (int): HTTP status code of the response.
+        """
+        self._inner = inner
+        self._url = url
+        self._status = status
+        self._pending = ""  # text of an incomplete line carried over to the next network chunk
+
+    async def __aiter__(self):
+        """Yield the original chunks, logging each complete ``data:`` line.
+
+        Yields:
+            bytes: The unmodified body chunks.
+        """
+        async for chunk in self._inner:
+            self._pending += chunk.decode("utf-8", "replace")
+            *lines, self._pending = self._pending.split("\n")
+            for line in lines:
+                if line.startswith("data:"):
+                    _write_wire("S->C SSE", self._url, line[5:].strip(), self._status)
+            yield chunk
+
+    async def aclose(self) -> None:
+        """Close the wrapped stream."""
+        await self._inner.aclose()
+
+
 async def _log_response(response: httpx.Response) -> None:
     """httpx hook: record an incoming response.
+
+    A normal body is read and logged whole. An event stream must not be read here (that would wait
+    for the end of the stream), so its body is wrapped to log each event as it arrives.
 
     Args:
         response (httpx.Response): Response just received.
     """
+    if response.headers.get("content-type", "").startswith("text/event-stream"):
+        response.stream = _SseLoggingStream(response.stream, str(response.request.url), response.status_code)
+        return
     await response.aread()
     _write_wire("S->C", str(response.request.url), response.text, response.status_code)
+
+
+def log_push_notification(url: str, body: str) -> None:
+    """Record a push notification received from an agent (agent -> supervisor direction).
+
+    Args:
+        url (str): URL of the receiver endpoint the agent called.
+        body (str): Raw HTTP body text of the notification.
+    """
+    _write_wire("PUSH A->S", f"POST {url}", body)
 
 
 def wire_log_hooks() -> dict[str, list]:

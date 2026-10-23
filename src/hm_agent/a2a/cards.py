@@ -9,9 +9,9 @@ from a2a.types.a2a_pb2 import AgentCapabilities, AgentCard, AgentInterface, Agen
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, TransportProtocol
 
 from hm_agent.core.settings import agent_url
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT
+from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, SHIPMENT_TRACKING
 
-CARD_VERSION = "0.2.0"  # bump when a card's skills or behaviour change
+CARD_VERSION = "0.4.0"  # bump when a card's skills or behaviour change
 
 # A skill is (skill id, skill name, skill description, example questions).
 _Skill = tuple[str, str, str, list[str]]
@@ -46,14 +46,30 @@ _AGENT_SPECS: dict[str, tuple[str, list[_Skill]]] = {
             ),
         ],
     ),
+    SHIPMENT_TRACKING: (
+        "Checks the carrier or warehouse for the shipping status of an order. The lookup is slow: "
+        "it streams progress while it works, and callers can register a push notification webhook "
+        "as a fallback if their connection drops.",
+        [
+            (
+                "shipment-status",
+                "Shipment status lookup",
+                "Carrier, tracking number, last scan and delivery outlook for an order id.",
+                ["Where is my order ORD-1007?", "Has my parcel shipped yet?"],
+            ),
+        ],
+    ),
 }
+
+# Agents whose tasks outlive a normal request, so their card advertises push notifications.
+PUSH_AGENTS = frozenset({SHIPMENT_TRACKING})
 
 
 def build_agent_card(agent: str) -> AgentCard:
     """Build the Agent Card for one agent.
 
     Args:
-        agent (str): Agent name, one of ``order_management``, ``customer_support``.
+        agent (str): Agent name, one of ``order_management``, ``customer_support``, ``shipment_tracking``.
 
     Returns:
         AgentCard: Card whose JSON-RPC interface points at the agent's configured URL.
@@ -73,8 +89,9 @@ def build_agent_card(agent: str) -> AgentCard:
                 protocol_version=PROTOCOL_VERSION_CURRENT,
             )
         ],
-        # Blocking request/response only: replies are short, so no streaming or push notifications.
-        capabilities=AgentCapabilities(streaming=False, push_notifications=False),
+        # Every agent streams progress and answer chunks. Push notifications only for agents with
+        # slow tasks: the webhook is the durable fallback if the caller's stream connection drops.
+        capabilities=AgentCapabilities(streaming=True, push_notifications=agent in PUSH_AGENTS),
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         skills=[

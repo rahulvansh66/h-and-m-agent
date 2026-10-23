@@ -69,3 +69,25 @@ production hardening that is still open, roughly in the order to do them.
 - Damaged-item claims often depend on order details (what was bought, when). Agents stay
   independent per the project rules, so chaining the order and support agents is left to the
   supervisor later.
+
+---
+Yes, `uuid.uuid4()` is the better choice, but it isn't urgent.
+
+**Why a UUID is better:**
+- `time.time_ns()` is only unique if two sends never land on the same clock tick. On Windows the clock resolution is coarser than 1 ns, so two concurrent sends could get the same value. That is rare but possible.
+- A UUID is unique by design, with no reliance on the clock. The A2A spec expects `messageId` to be unique so servers can dedupe, so a collision could make one message be treated as a duplicate of another.
+- A UUID also leaks no timing information.
+
+**Why it's low priority:**
+- Your supervisor sends one message per customer turn, mostly one at a time. A collision is very unlikely today.
+- It starts to matter if you add parallel fan-out to several agents. Each agent gets its own message, so IDs wouldn't collide across servers, but a retry loop or concurrent tests could.
+
+The change is at [client.py](src/hm_agent/a2a/client.py#L116):
+
+```python
+message_id=f"msg-{uuid.uuid4()}",
+```
+
+You'd also need `import uuid` at the top, and `time` can go if nothing else in the file uses it. If you want to keep the readable `msg-` prefix, the line above does that. It's still unique and easy to spot in the wire log.
+
+Want me to make that edit?

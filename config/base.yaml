@@ -32,6 +32,22 @@ a2a:
       port: 8001
     customer_support:
       port: 8002
+    shipment_tracking:
+      port: 8003                  # slow carrier lookups: streams progress; push webhook is the fallback
+  webhook_port: 8010              # supervisor-side receiver for push notifications from agents
+
+# FastAPI layer in front of the supervisor graph (python -m hm_agent.api).
+api:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins: []                # browser origins allowed to call the API (empty = none)
+  max_message_chars: 2000         # longest customer message accepted
+  rate_limit_per_min: 10          # chat requests per customer per minute (protects the Groq free tier)
+  pool_max_size: 4                # Neon connections held for the checkpointer
+
+# Dummy carrier lookup used by the shipment_tracking agent.
+shipment:
+  carrier_delay_s: 20             # simulated wait for the carrier / warehouse system
 
 database:
   checkpoint_schema: checkpoints  # Neon schema holding the LangGraph checkpoint tables

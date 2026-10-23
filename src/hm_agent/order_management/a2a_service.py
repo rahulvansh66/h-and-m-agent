@@ -20,7 +20,11 @@ def main() -> None:
     """Start the order management agent service on its configured port."""
     load_dotenv(REPO_ROOT / ".env")
     configure_logging(f"a2a-{ORDER_MANAGEMENT}")
-    app = build_a2a_app(build_agent_card(ORDER_MANAGEMENT), ORDER_MANAGEMENT, graph_runner(build_order_agent(), ORDER_MANAGEMENT))
+    # The ReAct agent's last model call is the customer-facing reply, so its tokens are streamed as written.
+    runner = graph_runner(
+        build_order_agent(), ORDER_MANAGEMENT, progress_labels={"tools": "Looked up your order data"}, stream_tokens=True
+    )
+    app = build_a2a_app(build_agent_card(ORDER_MANAGEMENT), ORDER_MANAGEMENT, runner)
     uvicorn.run(app, host=A2A_HOST, port=agent_port(ORDER_MANAGEMENT), log_level="info")
 
 

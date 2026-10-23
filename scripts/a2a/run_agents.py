@@ -1,4 +1,4 @@
-"""Start the two A2A agent services and keep them running until Ctrl+C.
+"""Start the A2A agent services and keep them running until Ctrl+C.
 
 Run (from the repo root):
     uv run python scripts/a2a/run_agents.py
@@ -19,11 +19,11 @@ from pathlib import Path
 
 from hm_agent.core.logging_setup import configure_logging
 from hm_agent.core.settings import REPO_ROOT, agent_url
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT
+from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, SHIPMENT_TRACKING
 
 logger = logging.getLogger(__name__)
 
-AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT)
+AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING)
 CARD_PATH = "/.well-known/agent-card.json"
 STARTUP_TIMEOUT_S = 120  # the support agent loads a local embedding model, which can take a while
 

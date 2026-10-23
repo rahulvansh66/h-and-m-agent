@@ -10,10 +10,11 @@ from pydantic import BaseModel, Field
 
 
 # Single source of truth for agent names: graph node names, message names and routing values.
-AgentName = Literal["order_management", "customer_support", "out_of_scope"]
+AgentName = Literal["order_management", "customer_support", "shipment_tracking", "out_of_scope"]
 
 ORDER_MANAGEMENT: AgentName = "order_management"
 CUSTOMER_SUPPORT: AgentName = "customer_support"
+SHIPMENT_TRACKING: AgentName = "shipment_tracking"
 OUT_OF_SCOPE: AgentName = "out_of_scope"
 
 # Where the supervisor sends a message when the routing model returns no decision.

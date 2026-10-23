@@ -1,11 +1,13 @@
 # H&M Fashion Assistant
 
 A supervisor multi-agent assistant for H&M customers, built with LangGraph. A supervisor reads each
-message and routes it to one of two sub-agents, or politely declines if it is out of scope.
+message and routes it to one of three sub-agents, or politely declines if it is out of scope. The agents
+run as separate A2A services, and a FastAPI layer exposes the assistant over HTTP with streaming.
 
 ```
 START -> supervisor -> order_management  -> END   (own orders and purchases, via MCP SQL tools)
                     -> customer_support  -> END   (agentic RAG over the support knowledge base)
+                    -> shipment_tracking -> END   (carrier lookup; slow, streams progress, push fallback)
                     -> out_of_scope      -> END
 ```
 
@@ -14,6 +16,7 @@ START -> supervisor -> order_management  -> END   (own orders and purchases, via
 | `supervisor` | Classifies the latest message (with a short history window) and picks the agent. |
 | `order_management` | ReAct agent over read-only tools served by an MCP server on the Neon `order_management` schema. The `customer_id` is injected from the run config, so the model never chooses whose data is read. |
 | `customer_support` | Condense query -> retrieve from Qdrant -> answer with citations (retries once if no citation). |
+| `shipment_tracking` | Finds the order id (`ORD-1007`) in the conversation and runs a deliberately slow dummy carrier lookup. It streams progress lines, and its Agent Card advertises push notifications. It makes no LLM calls. |
 | Checkpointer | `PostgresSaver` on Neon (schema `checkpoints`) stores conversation state per `thread_id`. |
 | Tracing | Langfuse; every turn is a trace, all turns of a thread form one Langfuse session. |
 
@@ -32,6 +35,7 @@ cp .env.example .env        # then fill in the values
 | `NEON_POSTGRES_CONNECTION_STRING` | Order data and the conversation checkpointer |
 | `NEON_POSTGRES_TEST_CONNECTION_STRING` | Separate test database (`neondb_test`); tests never use the main DSN |
 | `QDRANT_ENDPOINT`, `QDRANT_API_KEY` | Vector store for the support knowledge base |
+| `API_KEY` | Shared secret clients send as `X-API-Key` to the FastAPI layer (the API refuses to start without it) |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Tracing |
 
 Seed the database (one schema per agent; `--reset` rebuilds, `--test` targets the test database):
@@ -52,7 +56,13 @@ ports in `config/base.yaml`) in a separate terminal and leave them running:
 uv run python scripts/a2a/run_agents.py
 ```
 
-How it works and a real session walkthrough: `DOCS/working-info/a2a/`.
+This starts the order management, customer support and shipment tracking services (ports 8001 to 8003)
+and the push-notification receiver on 8010 is run by the supervisor side. How it works and real session
+walkthroughs: `DOCS/working-info/a2a/` (`basics/`, `streaming/`, `push-notifications/`).
+
+Agent replies stream end to end: runners yield chunks, the A2A server sends them as progress and
+artifact updates, and the supervisor forwards them to the caller. For slow tasks, if the stream breaks,
+the agent pushes the result to the webhook and it is saved into the same thread.
 
 ### Interactive chat (continuous conversation)
 
@@ -96,6 +106,37 @@ If you build an API or UI on top, keep one stable `thread_id` per conversation a
 uv run python -m hm_agent.customer_support.rag "What happens if my package can't be delivered?"
 ```
 
+## HTTP API
+
+A FastAPI layer in front of the supervisor graph. Start the agent services first, then:
+
+```bash
+uv run python -m hm_agent.api
+```
+
+Every `/v1` request needs `X-API-Key` (the `API_KEY` from `.env`) and `X-Customer-Id`. The server
+holds the customer id, so the model never chooses whose data is read. A thread belongs to the customer
+who created it; another customer gets 404. Host, port, CORS origins, pool size and the per-minute rate
+limit are under `api:` in `config/base.yaml`.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/chat` | Send one message and get the full reply (and the `thread_id`). |
+| `POST /v1/chat/stream` | Same, as server-sent events (progress and answer chunks). |
+| `GET /v1/threads/{id}/messages` | Conversation history of a thread. |
+| `GET /v1/threads/{id}/events` | Server-sent events for results pushed by agents after the fact. |
+| `GET /healthz`, `GET /readyz` | Liveness and readiness (database) checks. |
+
+Details: `DOCS/working-info/api/`.
+
+## Tests
+
+Tests use fakes for the graph, the LLM and Neon, so they make no Groq calls:
+
+```bash
+uv run pytest
+```
+
 ## Configuration
 
 Layered YAML in `config/`: `base.yaml` holds the defaults and `dev.yaml` is merged over it
@@ -115,13 +156,17 @@ Secrets never go in the YAML files; they live in `.env`.
 src/hm_agent/
   cli.py            CLI entry point (single query and chat loop)
   graph.py          Supervisor graph assembly
+  turns.py          One-message turn logic shared by the CLI and the API
+  api/              FastAPI app, routes, auth, rate limit, thread locks and SSE
   core/             Shared config, settings, LLM factory, logging, db and graph state
   supervisor/       Routes each request to a specialist agent
   order_management/ Agent, MCP server and client (injects customer_id), A2A service
   customer_support/ Agent, RAG pipeline (rag/), A2A service
-  a2a/              Generic A2A server, client, cards and supervisor remote node
+  shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service
+  a2a/              Generic A2A server, client, cards, stream chunks, push receiver and supervisor remote node
+tests/              Unit and API tests (fakes, no live services)
 config/             base.yaml, dev.yaml
-scripts/            Database creation and query scripts, and a2a/run_agents.py (starts both agent services)
+scripts/            Database creation and query scripts, and a2a/run_agents.py (starts the agent services)
 DOCS/               Data documentation and code-reading guide
 ```
 
