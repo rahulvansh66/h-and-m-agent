@@ -24,8 +24,9 @@ from hm_agent.core.state import (
 logger = logging.getLogger(__name__)
 
 OUT_OF_SCOPE_REPLY = (
-    "I can help with questions about your orders and purchases, where your parcel is, and "
-    "damaged or defective items. For anything else, please contact H&M customer service."
+    "I can help with questions about your orders and purchases, where your parcel is, "
+    "damaged or defective items, and outfit or product suggestions. "
+    "For anything else, please contact H&M customer service."
 )
 
 SUPERVISOR_PROMPT = """\
@@ -41,7 +42,9 @@ You are given the recent conversation. Choose exactly one agent for the latest c
   carrier and tracking questions.
 - customer_support: anything about damaged, defective, broken or faulty items, and what to do
   about them (returns, replacements, refunds, contacting a seller, proof, timelines).
-- out_of_scope: anything else (general chat, product advice, unrelated topics).
+- fashion: product recommendations and styling advice (what goes with an item, an outfit for an
+  occasion, something similar to a product).
+- out_of_scope: anything else (general chat, unrelated topics).
 
 # RULES
 - Use the conversation to understand the latest message. A short follow-up ("what about the
@@ -50,11 +53,13 @@ You are given the recent conversation. Choose exactly one agent for the latest c
 - If the message mentions a damaged or defective item, choose customer_support.
 - If the message is about order or purchase information, choose order_management.
 - If the message is about where an order is or when it arrives, choose shipment_tracking.
+- Buying history is a fact (order_management); pairing, outfits and recommendations are advice (fashion).
+  "What did I buy last?" is order_management; "what goes with what I bought?" is fashion.
 - If it fits no agent, choose out_of_scope. If it is only unclear, prefer customer_support.
 - Never invent another agent name.
 
 # OUTPUT
-Return the structured fields only: `agent` (order_management | customer_support | shipment_tracking | out_of_scope)
+Return the structured fields only: `agent` (order_management | customer_support | shipment_tracking | fashion | out_of_scope)
 and `reason` (one short sentence).
 """
 
@@ -111,7 +116,7 @@ def route_to_agent(state: AgentState) -> AgentName:
     """Conditional edge: send the run to the agent the supervisor chose.
 
     Reads: ``next_agent``. Writes: nothing.
-    Possible next nodes: ``order_management``, ``customer_support``, ``shipment_tracking``, ``out_of_scope``.
+    Possible next nodes: ``order_management``, ``customer_support``, ``shipment_tracking``, ``fashion``, ``out_of_scope``.
 
     Args:
         state: Current graph state.

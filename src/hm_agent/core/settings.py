@@ -16,6 +16,11 @@ RAG_MAX_RETRIES = _CONFIG["rag"]["max_retries"]  # query-rewrite retries when th
 RAG_MIN_SCORE = _CONFIG["rag"]["min_score"]  # minimum similarity for a chunk to reach the LLM
 RAG_CONDENSE_HISTORY = _CONFIG["rag"]["condense_history_messages"]  # messages used to condense the query
 SUPERVISOR_HISTORY = _CONFIG["supervisor"]["history_messages"]  # messages the supervisor sees when routing
+FASHION_COLLECTION = _CONFIG["fashion"]["collection"]  # Qdrant collection holding the product catalog vectors
+FASHION_TOP_K = _CONFIG["fashion"]["top_k"]  # products fetched per search
+FASHION_MIN_SCORE = _CONFIG["fashion"]["min_score"]  # minimum similarity for a product to be returned
+FASHION_MCP_HOST = _CONFIG["fashion"]["mcp_host"]  # interface of the long-lived fashion MCP server
+FASHION_MCP_PORT = _CONFIG["fashion"]["mcp_port"]
 CHECKPOINT_SCHEMA = _CONFIG["database"]["checkpoint_schema"]  # Neon schema for LangGraph checkpoints
 LOG_LEVEL = _CONFIG["logging"]["level"]
 TRACING_TAGS = _CONFIG["tracing"]["tags"]
@@ -71,6 +76,11 @@ __all__ = [
     "RAG_MIN_SCORE",
     "RAG_CONDENSE_HISTORY",
     "SUPERVISOR_HISTORY",
+    "FASHION_COLLECTION",
+    "FASHION_TOP_K",
+    "FASHION_MIN_SCORE",
+    "FASHION_MCP_HOST",
+    "FASHION_MCP_PORT",
     "CHECKPOINT_SCHEMA",
     "LOG_LEVEL",
     "TRACING_TAGS",

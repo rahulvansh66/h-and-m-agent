@@ -1,13 +1,14 @@
 # H&M Fashion Assistant
 
 A multi-agent assistant for H&M, built with LangGraph. A supervisor reads each
-message and routes it to one of three sub-agents. The agents
+message and routes it to one of four sub-agents. The agents
 run as separate A2A services, and a FastAPI layer exposes the assistant over HTTP with streaming.
 
 ```
 START -> supervisor -> order_management  -> END   (own orders and purchases, via MCP SQL tools)
                     -> customer_support  -> END   (agentic RAG over the support knowledge base)
                     -> shipment_tracking -> END   (carrier lookup; slow, streams progress, push fallback)
+                    -> fashion           -> END   (outfit and similar-product advice from catalog search)
                     -> out_of_scope      -> END
 ```
 
@@ -17,6 +18,7 @@ START -> supervisor -> order_management  -> END   (own orders and purchases, via
 | `order_management` | ReAct agent over read-only tools served by an MCP server on the Neon `order_management` schema. The `customer_id` is injected from the run config, so the model never chooses whose data is read. |
 | `customer_support` | Condense query -> retrieve from Qdrant -> answer with citations (retries once if no citation). |
 | `shipment_tracking` | Finds the order id (`ORD-1007`) in the conversation and runs a deliberately slow dummy carrier lookup. It streams progress lines, and its Agent Card advertises push notifications. It makes no LLM calls. |
+| `fashion` | ReAct agent that recommends products and outfits. Its tools come from a fashion MCP server: semantic product search over a Qdrant collection built from `product_catalog`, purchase history, a short styling guide and the customer's style profile. It recommends only products the tools return. |
 | Checkpointer | `PostgresSaver` on Neon (schema `checkpoints`) stores conversation state per `thread_id`. |
 | Tracing | Langfuse; every turn is a trace, all turns of a thread form one Langfuse session. |
 
@@ -47,6 +49,13 @@ uv run python scripts/neon-db-creation/init_neon.py
 The support agent expects a Qdrant collection named `troubleshooting_kb` (see `config/base.yaml`),
 embedded with `BAAI/bge-small-en-v1.5`. This repo does not yet include an ingestion script for it.
 
+The fashion agent searches a second collection, `product_catalog`, built from the Neon `product_catalog`
+table (recreated on every run):
+
+```bash
+uv run python scripts/fashion/ingest_catalog.py
+```
+
 ## Usage
 
 The supervisor reaches each agent over A2A, so start the agent services first (one process each,
@@ -56,8 +65,9 @@ ports in `config/base.yaml`) in a separate terminal and leave them running:
 uv run python scripts/a2a/run_agents.py
 ```
 
-This starts the order management, customer support and shipment tracking services (ports 8001 to 8003)
-and the push-notification receiver on 8010 is run by the supervisor side. How it works and real session
+This starts the fashion MCP server (port 8005, so its embedding model loads once) and the order management,
+customer support, shipment tracking and fashion services (ports 8001 to 8004). The push-notification receiver
+on 8010 is run by the supervisor side. How it works and real session
 walkthroughs: `DOCS/working-info/a2a/` (`basics/`, `streaming/`, `push-notifications/`).
 
 Agent replies stream end to end: runners yield chunks, the A2A server sends them as progress and
@@ -163,10 +173,11 @@ src/hm_agent/
   order_management/ Agent, MCP server and client (injects customer_id), A2A service
   customer_support/ Agent, RAG pipeline (rag/), A2A service
   shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service
+  fashion/          Agent, MCP server and client (product search, styling guides), A2A service
   a2a/              Generic A2A server, client, cards, stream chunks, push receiver and supervisor remote node
 tests/              Unit and API tests (fakes, no live services)
 config/             base.yaml, dev.yaml
-scripts/            Database creation and query scripts, and a2a/run_agents.py (starts the agent services)
+scripts/            Database creation and query scripts, fashion/ingest_catalog.py, and a2a/run_agents.py (starts the agent services)
 DOCS/               Data documentation and code-reading guide
 ```
 

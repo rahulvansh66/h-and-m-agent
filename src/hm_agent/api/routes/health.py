@@ -12,11 +12,11 @@ from fastapi.responses import JSONResponse
 
 from hm_agent.api.schemas import AgentStatus, ReadyResponse
 from hm_agent.core.settings import agent_url
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, SHIPMENT_TRACKING
+from hm_agent.core.state import CUSTOMER_SUPPORT, FASHION, ORDER_MANAGEMENT, SHIPMENT_TRACKING
 
 router = APIRouter()
 
-AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING)
+AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING, FASHION)
 CARD_PATH = "/.well-known/agent-card.json"
 CARD_TIMEOUT_S = 2.0
 

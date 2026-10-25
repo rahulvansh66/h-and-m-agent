@@ -2,7 +2,7 @@
 
 ## Local-only folders
 
-`.tmp/` and `.ref/` are local scratch and reference folders, not part of the project. Read from them only
+`.tmp/` and `ref/` are local scratch and reference folders, not part of the project. Read from them only
 when explicitly asked or referenced, and never mention, cite, or document them as a source anywhere in the codebase
 (code, docstrings, comments, docs, configs, or notebooks).
 

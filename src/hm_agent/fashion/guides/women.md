@@ -1,0 +1,7 @@
+- Build outfits as one top + one bottom + optional layer (blazer, jacket, cardigan).
+- Balance fit: if one piece is fitted (leggings, jeggings), keep the other relaxed or structured (blazer, tee).
+- Dress up or down with the outer layer: a blazer makes jeans or jeggings smart; a cardigan or jacket makes it casual.
+- Neutral base (black, grey, navy, white) plus at most one accent colour.
+- Formal or smart events: structured blazer, dark bottoms, minimal accessories.
+- Casual: tee or knit, relaxed bottoms, a light jacket.
+- Never suggest swimwear or underwear as part of an outfit.

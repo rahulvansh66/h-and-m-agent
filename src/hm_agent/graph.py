@@ -3,6 +3,7 @@
     START -> supervisor -> order_management  (A2A) -> END
                         -> customer_support  (A2A) -> END
                         -> shipment_tracking (A2A, push notifications) -> END
+                        -> fashion           (A2A) -> END
                         -> out_of_scope      (local) -> END
 
 Role in the system: wires the supervisor and the agents into one compiled graph. The two real
@@ -17,9 +18,16 @@ from langgraph.graph.state import CompiledStateGraph
 
 from hm_agent.a2a.remote_node import make_remote_agent_node
 from hm_agent.supervisor.agent import out_of_scope_node, route_to_agent, supervisor_node
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, OUT_OF_SCOPE, SHIPMENT_TRACKING, AgentState
+from hm_agent.core.state import (
+    CUSTOMER_SUPPORT,
+    FASHION,
+    ORDER_MANAGEMENT,
+    OUT_OF_SCOPE,
+    SHIPMENT_TRACKING,
+    AgentState,
+)
 
-REMOTE_AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING)  # agents served as remote A2A services
+REMOTE_AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING, FASHION)  # agents served as remote A2A services
 
 
 def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> CompiledStateGraph:
@@ -34,7 +42,7 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> CompiledStat
 
     Returns:
         CompiledStateGraph: Graph with nodes ``supervisor``, ``order_management``,
-        ``customer_support``, ``shipment_tracking`` and ``out_of_scope``.
+        ``customer_support``, ``shipment_tracking``, ``fashion`` and ``out_of_scope``.
     """
     graph = StateGraph(AgentState)
     graph.add_node("supervisor", supervisor_node)

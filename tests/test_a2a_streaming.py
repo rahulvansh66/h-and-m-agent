@@ -13,7 +13,7 @@ from hm_agent.a2a import client as a2a_client
 from hm_agent.a2a.cards import build_agent_card
 from hm_agent.a2a.chunks import Chunk, answer, progress
 from hm_agent.a2a.server import build_a2a_app
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, SHIPMENT_TRACKING
+from hm_agent.core.state import CUSTOMER_SUPPORT, FASHION, ORDER_MANAGEMENT, SHIPMENT_TRACKING
 
 AGENT_URL = "http://agent.test"
 
@@ -82,7 +82,7 @@ def serve(monkeypatch: pytest.MonkeyPatch):
 
 def test_cards_advertise_streaming_and_push_only_for_shipment() -> None:
     """Every card streams; only the shipment agent also advertises push notifications."""
-    for agent in (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING):
+    for agent in (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING, FASHION):
         card: AgentCard = build_agent_card(agent)
         assert card.capabilities.streaming
         assert card.capabilities.push_notifications == (agent == SHIPMENT_TRACKING)

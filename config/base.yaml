@@ -22,6 +22,14 @@ rag:
 supervisor:
   history_messages: 6             # most recent messages the supervisor sees when routing
 
+# Fashion agent: product search over a Qdrant collection built from product_catalog.
+fashion:
+  collection: product_catalog     # Qdrant collection (built by scripts/fashion/ingest_catalog.py)
+  top_k: 5                        # products fetched per search
+  min_score: 0.5                  # relevance gate: products scoring below this are dropped
+  mcp_host: 127.0.0.1             # long-lived MCP server, so the embedding model loads once
+  mcp_port: 8005
+
 # A2A: each agent runs as its own HTTP service; the supervisor calls them as an A2A client.
 a2a:
   host: 127.0.0.1                 # interface the agent services bind to and the supervisor calls
@@ -34,6 +42,8 @@ a2a:
       port: 8002
     shipment_tracking:
       port: 8003                  # slow carrier lookups: streams progress; push webhook is the fallback
+    fashion:
+      port: 8004
   webhook_port: 8010              # supervisor-side receiver for push notifications from agents
 
 # FastAPI layer in front of the supervisor graph (python -m hm_agent.api).

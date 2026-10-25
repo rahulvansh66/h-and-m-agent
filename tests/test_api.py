@@ -184,7 +184,7 @@ def test_health_and_readiness(client: TestClient, monkeypatch: pytest.MonkeyPatc
     assert client.get("/healthz").json() == {"status": "ok"}
     ready = client.get("/readyz")
     assert ready.status_code == 503
-    assert not ready.json()["ready"] and len(ready.json()["agents"]) == 3
+    assert not ready.json()["ready"] and len(ready.json()["agents"]) == 4
 
 
 def test_pushed_result_reaches_listeners() -> None:

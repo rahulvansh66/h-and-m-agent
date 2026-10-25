@@ -1,0 +1,7 @@
+- Build outfits as one top + one bottom + optional layer (jacket, blazer, knit).
+- Fit matters most: shoulders sit at the seam, trousers taper without clinging.
+- Dress up or down with the outer layer: a blazer over a tee is smart casual; a plain jacket keeps it casual.
+- Neutral base (black, grey, navy, white, beige) plus at most one accent colour.
+- Formal or smart events: blazer or suit jacket, dark trousers, plain shirt.
+- Casual: tee or knit, jeans or chinos, a light jacket.
+- Never suggest swimwear or underwear as part of an outfit.

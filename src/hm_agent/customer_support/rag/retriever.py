@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 @cache
-def _get_client() -> QdrantClient:
+def get_client() -> QdrantClient:
     """Build and cache the Qdrant client from ``QDRANT_ENDPOINT`` / ``QDRANT_API_KEY``.
+
+    Shared with the fashion agent's product search.
 
     Returns:
         QdrantClient: Client connected to the configured Qdrant cluster.
@@ -28,8 +30,10 @@ def _get_client() -> QdrantClient:
 
 
 @cache
-def _get_embedder() -> TextEmbedding:
+def get_embedder() -> TextEmbedding:
     """Load and cache the embedding model named under ``embedding`` in the layered config.
+
+    Shared with the fashion agent, so documents and queries use the same model.
 
     Returns:
         TextEmbedding: Local fastembed model (downloaded on first use).
@@ -48,8 +52,8 @@ def retrieve(query: str, top_k: int = RAG_TOP_K) -> list[dict]:
         list[dict]: Chunks ordered by similarity, each with ``text``, ``doc_title``,
         ``source_file``, ``page`` and ``score``. Empty if nothing matched.
     """
-    vector = next(iter(_get_embedder().query_embed(query))).tolist()
-    hits = _get_client().query_points(
+    vector = next(iter(get_embedder().query_embed(query))).tolist()
+    hits = get_client().query_points(
         collection_name=RAG_COLLECTION, query=vector, limit=top_k, with_payload=True
     ).points
     docs = [

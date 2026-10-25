@@ -11,6 +11,7 @@ there instead of this terminal. The launcher waits until every Agent Card answer
 
 import argparse
 import logging
+import socket
 import subprocess
 import sys
 import time
@@ -18,12 +19,13 @@ import urllib.request
 from pathlib import Path
 
 from hm_agent.core.logging_setup import configure_logging
-from hm_agent.core.settings import REPO_ROOT, agent_url
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, SHIPMENT_TRACKING
+from hm_agent.core.settings import FASHION_MCP_HOST, FASHION_MCP_PORT, REPO_ROOT, agent_url
+from hm_agent.core.state import CUSTOMER_SUPPORT, FASHION, ORDER_MANAGEMENT, SHIPMENT_TRACKING
 
 logger = logging.getLogger(__name__)
 
-AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING)
+AGENTS = (ORDER_MANAGEMENT, CUSTOMER_SUPPORT, SHIPMENT_TRACKING, FASHION)
+FASHION_MCP = "fashion-mcp"  # long-lived tool server the fashion agent connects to at start-up
 CARD_PATH = "/.well-known/agent-card.json"
 STARTUP_TIMEOUT_S = 120  # the support agent loads a local embedding model, which can take a while
 
@@ -48,8 +50,29 @@ def _wait_for_card(agent: str, proc: subprocess.Popen) -> bool:
     return False
 
 
+def _wait_for_port(host: str, port: int, proc: subprocess.Popen) -> bool:
+    """Poll a TCP port until it accepts connections or the process dies.
+
+    Args:
+        host (str): Host the server binds to.
+        port (int): Port the server listens on.
+        proc (subprocess.Popen): The server's process; polling stops if it exits.
+
+    Returns:
+        bool: True when the port accepted a connection within ``STARTUP_TIMEOUT_S``, otherwise False.
+    """
+    deadline = time.monotonic() + STARTUP_TIMEOUT_S
+    while time.monotonic() < deadline and proc.poll() is None:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return True
+        except OSError:
+            time.sleep(1)
+    return False
+
+
 def main() -> None:
-    """Launch all agent services, wait for them to be ready, and stop them on Ctrl+C."""
+    """Launch the fashion MCP server and all agent services, wait until ready, and stop them on Ctrl+C."""
     configure_logging("a2a-launcher")
     parser = argparse.ArgumentParser(description="Run the H&M A2A agent services")
     parser.add_argument("--log-dir", default=None, help="Directory for per-agent console logs (default: this terminal)")
@@ -61,6 +84,17 @@ def main() -> None:
 
     procs: dict[str, subprocess.Popen] = {}
     try:
+        # The fashion agent loads its tools from this server while building, so it must be listening first.
+        out = open(log_dir / f"agent-{FASHION_MCP}.log", "w", encoding="utf-8") if log_dir else None
+        procs[FASHION_MCP] = subprocess.Popen(
+            [sys.executable, "-m", "hm_agent.fashion.mcp_server"],
+            cwd=REPO_ROOT,
+            stdout=out,
+            stderr=subprocess.STDOUT if out else None,
+        )
+        logger.info("agent=%s status=started pid=%s", FASHION_MCP, procs[FASHION_MCP].pid)
+        if not _wait_for_port(FASHION_MCP_HOST, FASHION_MCP_PORT, procs[FASHION_MCP]):
+            raise SystemExit(f"{FASHION_MCP} did not become ready; check its log")
         for agent in AGENTS:
             out = open(log_dir / f"agent-{agent}.log", "w", encoding="utf-8") if log_dir else None
             procs[agent] = subprocess.Popen(
@@ -71,6 +105,8 @@ def main() -> None:
             )
             logger.info("agent=%s status=started pid=%s url=%s", agent, procs[agent].pid, agent_url(agent))
         for agent, proc in procs.items():
+            if agent == FASHION_MCP:
+                continue
             ready = _wait_for_card(agent, proc)
             logger.info("agent=%s status=%s", agent, "ready" if ready else "not_ready")
             if not ready:

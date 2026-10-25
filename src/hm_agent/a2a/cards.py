@@ -9,9 +9,9 @@ from a2a.types.a2a_pb2 import AgentCapabilities, AgentCard, AgentInterface, Agen
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, TransportProtocol
 
 from hm_agent.core.settings import agent_url
-from hm_agent.core.state import CUSTOMER_SUPPORT, ORDER_MANAGEMENT, SHIPMENT_TRACKING
+from hm_agent.core.state import CUSTOMER_SUPPORT, FASHION, ORDER_MANAGEMENT, SHIPMENT_TRACKING
 
-CARD_VERSION = "0.4.0"  # bump when a card's skills or behaviour change
+CARD_VERSION = "0.5.0"  # bump when a card's skills or behaviour change
 
 # A skill is (skill id, skill name, skill description, example questions).
 _Skill = tuple[str, str, str, list[str]]
@@ -59,6 +59,24 @@ _AGENT_SPECS: dict[str, tuple[str, list[_Skill]]] = {
             ),
         ],
     ),
+    FASHION: (
+        "Recommends products and outfits from the H&M catalog, using the customer's purchases "
+        "and a short styling guide.",
+        [
+            (
+                "outfit-suggestions",
+                "Outfit suggestions",
+                "Outfits for an occasion or to go with an item the customer owns.",
+                ["Suggest an outfit for a smart casual dinner", "What goes with the jacket I bought last time?"],
+            ),
+            (
+                "similar-products",
+                "Similar products",
+                "Catalog items similar to a described style or to a previous purchase.",
+                ["Show me something similar to my last purchase"],
+            ),
+        ],
+    ),
 }
 
 # Agents whose tasks outlive a normal request, so their card advertises push notifications.
@@ -69,7 +87,7 @@ def build_agent_card(agent: str) -> AgentCard:
     """Build the Agent Card for one agent.
 
     Args:
-        agent (str): Agent name, one of ``order_management``, ``customer_support``, ``shipment_tracking``.
+        agent (str): Agent name, one of ``order_management``, ``customer_support``, ``shipment_tracking``, ``fashion``.
 
     Returns:
         AgentCard: Card whose JSON-RPC interface points at the agent's configured URL.
