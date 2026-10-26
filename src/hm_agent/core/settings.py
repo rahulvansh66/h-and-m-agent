@@ -36,6 +36,49 @@ API_MAX_MESSAGE_CHARS = _CONFIG["api"]["max_message_chars"]
 API_RATE_LIMIT_PER_MIN = _CONFIG["api"]["rate_limit_per_min"]
 API_POOL_MAX_SIZE = _CONFIG["api"]["pool_max_size"]
 A2A_PORTS = {name: spec["port"] for name, spec in _CONFIG["a2a"]["agents"].items()}  # agent name -> port
+AUTH_ISSUER = _CONFIG["auth"]["issuer"]  # expected token `iss`
+AUTH_AUDIENCE = _CONFIG["auth"]["audience"]  # expected token `aud`
+AUTH_CUSTOMER_CLAIM = _CONFIG["auth"]["customer_claim"]  # namespaced claim holding the customer id
+AUTH_JWKS_CACHE_TTL_S = _CONFIG["auth"]["jwks_cache_ttl_s"]  # in-memory signing-key cache lifetime
+AWS_REGION = _CONFIG["aws"]["region"]  # region of the AgentCore Runtimes (used for SigV4 signing)
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _flag(env_var: str, default: bool) -> bool:
+    """Read a boolean switch, letting an environment variable override the config default.
+
+    Read at call time because ``.env`` is loaded after this module is imported.
+
+    Args:
+        env_var (str): Name of the environment variable that overrides the default.
+        default (bool): Value from the config file, used when the variable is unset or empty.
+
+    Returns:
+        bool: True when the effective value is one of ``1/true/yes/on`` (case-insensitive).
+    """
+    raw = os.environ.get(env_var)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in _TRUE_VALUES
+
+
+def auth_enabled() -> bool:
+    """Return whether user-token verification is on (``auth.enabled`` or env ``AUTH_ENABLED``).
+
+    Returns:
+        bool: True when tokens must be verified; False keeps the local unauthenticated behaviour.
+    """
+    return _flag("AUTH_ENABLED", _CONFIG["auth"]["enabled"])
+
+
+def sigv4_enabled() -> bool:
+    """Return whether A2A requests are SigV4-signed (``aws.sigv4_enabled`` or env ``SIGV4_ENABLED``).
+
+    Returns:
+        bool: True when outgoing agent calls must be signed with IAM credentials.
+    """
+    return _flag("SIGV4_ENABLED", _CONFIG["aws"]["sigv4_enabled"])
 
 
 def agent_port(agent: str) -> int:
@@ -96,6 +139,13 @@ __all__ = [
     "API_RATE_LIMIT_PER_MIN",
     "API_POOL_MAX_SIZE",
     "A2A_PORTS",
+    "AUTH_ISSUER",
+    "AUTH_AUDIENCE",
+    "AUTH_CUSTOMER_CLAIM",
+    "AUTH_JWKS_CACHE_TTL_S",
+    "AWS_REGION",
+    "auth_enabled",
+    "sigv4_enabled",
     "agent_port",
     "agent_url",
 ]

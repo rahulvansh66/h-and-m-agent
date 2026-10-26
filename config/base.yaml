@@ -59,6 +59,20 @@ api:
 shipment:
   carrier_delay_s: 20             # simulated wait for the carrier / warehouse system
 
+# End-user authentication: the OIDC access token the supervisor entrypoint and agents verify.
+# Off locally so today's unauthenticated behaviour is unchanged; deployments switch it on.
+auth:
+  enabled: false                  # verify user tokens (env AUTH_ENABLED overrides)
+  issuer: https://example.auth0.com/  # token `iss`; JWKS is fetched from its discovery document
+  audience: https://hm-agent/api  # token `aud` this service accepts
+  customer_claim: https://hm-agent/customer_id  # namespaced claim carrying the verified customer id
+  jwks_cache_ttl_s: 3600          # how long fetched signing keys are cached in memory
+
+# AWS: region and request signing for calls between AgentCore Runtimes.
+aws:
+  region: us-east-1
+  sigv4_enabled: false            # sign A2A requests with IAM credentials (env SIGV4_ENABLED overrides)
+
 database:
   checkpoint_schema: checkpoints  # Neon schema holding the LangGraph checkpoint tables
 
