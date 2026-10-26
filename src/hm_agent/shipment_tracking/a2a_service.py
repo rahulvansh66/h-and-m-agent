@@ -11,17 +11,18 @@ from hm_agent.a2a.cards import build_agent_card
 from hm_agent.a2a.server import build_a2a_app
 from hm_agent.core.config import REPO_ROOT
 from hm_agent.core.logging_setup import configure_logging
-from hm_agent.core.settings import A2A_HOST, agent_port
+from hm_agent.core.settings import bind_address
 from hm_agent.core.state import SHIPMENT_TRACKING
 from hm_agent.shipment_tracking.agent import shipment_runner
 
 
 def main() -> None:
-    """Start the shipment tracking agent service on its configured port."""
+    """Start the shipment tracking agent service on its configured port (or the ``A2A_BIND_*`` override)."""
     load_dotenv(REPO_ROOT / ".env")
     configure_logging(f"a2a-{SHIPMENT_TRACKING}")
+    host, port = bind_address(SHIPMENT_TRACKING)  # local defaults; A2A_BIND_HOST / A2A_BIND_PORT override for Runtime
     app = build_a2a_app(build_agent_card(SHIPMENT_TRACKING), SHIPMENT_TRACKING, shipment_runner)
-    uvicorn.run(app, host=A2A_HOST, port=agent_port(SHIPMENT_TRACKING), log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

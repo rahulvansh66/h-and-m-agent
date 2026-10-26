@@ -1,0 +1,74 @@
+# Local stack: the supervisor entrypoint plus the four A2A agents, built for linux/arm64 like AgentCore Runtime.
+#
+#   docker compose up --build
+#   curl -N -X POST localhost:8090/invocations -H 'Content-Type: application/json' \
+#     -H 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: local-session-000000000000000001' \
+#     -d '{"message": "Where is my order ORD-1001?", "customer_id": "cust001"}'
+#
+# Secrets (Neon, Groq, Qdrant, Langfuse) come from .env at run time; nothing is baked into the images.
+# Building arm64 on an x86 machine uses QEMU emulation and is slow; that is expected.
+
+x-agent: &agent
+  platform: linux/arm64
+  env_file: .env
+  build: &agent-build
+    context: .
+    target: agent
+
+services:
+  order-management:
+    <<: *agent
+    build:
+      <<: *agent-build
+      args: {AGENT: order_management}
+    image: hm-order-management
+    environment:
+      ORDER_MANAGEMENT_AGENT_URL: http://order-management:9000  # address the agent's own card advertises
+
+  customer-support:
+    <<: *agent
+    build:
+      <<: *agent-build
+      args: {AGENT: customer_support, PRELOAD_EMBEDDING: "true"}
+    image: hm-customer-support
+    environment:
+      CUSTOMER_SUPPORT_AGENT_URL: http://customer-support:9000
+
+  shipment-tracking:
+    <<: *agent
+    build:
+      <<: *agent-build
+      args: {AGENT: shipment_tracking}
+    image: hm-shipment-tracking
+    environment:
+      SHIPMENT_TRACKING_AGENT_URL: http://shipment-tracking:9000
+
+  fashion:
+    <<: *agent
+    build:
+      <<: *agent-build
+      args: {AGENT: fashion, PRELOAD_EMBEDDING: "true"}
+    image: hm-fashion
+    environment:
+      FASHION_AGENT_URL: http://fashion:9000
+
+  supervisor:
+    platform: linux/arm64
+    env_file: .env
+    build:
+      context: .
+      target: supervisor
+    image: hm-supervisor
+    environment:
+      ORDER_MANAGEMENT_AGENT_URL: http://order-management:9000
+      CUSTOMER_SUPPORT_AGENT_URL: http://customer-support:9000
+      SHIPMENT_TRACKING_AGENT_URL: http://shipment-tracking:9000
+      FASHION_AGENT_URL: http://fashion:9000
+      PUSH_RECEIVER_ENABLED: "false"  # stream-only: Runtime has no webhook listener
+    ports:
+      - "8090:8080"  # 8090 on the host: 8080 is often taken
+    depends_on:
+      - order-management
+      - customer-support
+      - shipment-tracking
+      - fashion

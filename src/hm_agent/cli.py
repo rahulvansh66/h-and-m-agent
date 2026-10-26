@@ -38,7 +38,7 @@ from hm_agent.core.db import neon_checkpointer
 from hm_agent.graph import build_graph
 from hm_agent.turns import stream_turn
 from hm_agent.core.logging_setup import configure_logging
-from hm_agent.core.settings import A2A_WEBHOOK_PORT, DEFAULT_CUSTOMER_ID, REPO_ROOT
+from hm_agent.core.settings import A2A_WEBHOOK_PORT, DEFAULT_CUSTOMER_ID, REPO_ROOT, push_receiver_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +132,13 @@ def main() -> None:
             graph = build_graph(checkpointer)
             interactive = args.query is None
             # Receives push notifications from agents with slow tasks and delivers their results.
-            receiver = PushReceiver(A2A_WEBHOOK_PORT, _make_deliver(graph, interactive))
-            receiver.start()
-            set_receiver(receiver)
+            if push_receiver_enabled():
+                receiver = PushReceiver(A2A_WEBHOOK_PORT, _make_deliver(graph, interactive))
+                receiver.start()
+                set_receiver(receiver)
             if not interactive:
                 _run_turn(graph, args.query, args.customer_id, thread_id)
-                if not receiver.wait_idle(PUSH_WAIT_S):
+                if receiver is not None and not receiver.wait_idle(PUSH_WAIT_S):
                     logger.warning("component=cli status=push_timeout wait_s=%d", PUSH_WAIT_S)
             else:
                 print(f"Chat started (thread_id: {thread_id}). Type 'exit' to quit.")

@@ -8,6 +8,7 @@ later at the webhook; otherwise the call blocks and the reply is read from the t
 ``stream_remote_agent`` is the streaming variant: it keeps the connection open and yields the agent's
 progress lines and answer pieces as they arrive (and still registers the webhook for agents that
 support push, as a fallback if the connection drops).
+Every HTTP call is SigV4-signed when ``SIGV4_ENABLED`` is on (``hm_agent.a2a.sigv4``); local calls are unsigned.
 The optional wire log (``A2A_WIRE_LOG``) lives in ``hm_agent.a2a.wire_log``.
 """
 
@@ -32,7 +33,9 @@ from a2a.types.a2a_pb2 import (
     TaskState,
 )
 
+from hm_agent.a2a.sigv4 import request_auth
 from hm_agent.a2a.wire_log import wire_log_hooks
+from hm_agent.auth import USER_TOKEN_METADATA_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,23 @@ def task_reply(task: Task) -> str:
     return "\n".join(get_artifact_text(a, delimiter="") for a in task.artifacts)
 
 
+def _request_metadata(customer_id: str, thread_id: str, user_token: str) -> dict[str, str]:
+    """Build the A2A request metadata carrying the customer, thread and (when present) the user token.
+
+    Args:
+        customer_id (str): Customer the conversation belongs to.
+        thread_id (str): Conversation thread id.
+        user_token (str): End user's access token; omitted from the metadata when empty.
+
+    Returns:
+        dict[str, str]: Metadata for ``SendMessageRequest``. The token must never be logged.
+    """
+    metadata = {"customer_id": customer_id, "thread_id": thread_id}
+    if user_token:
+        metadata[USER_TOKEN_METADATA_KEY] = user_token
+    return metadata
+
+
 async def _send(
     url: str,
     text: str,
@@ -89,6 +109,7 @@ async def _send(
     thread_id: str,
     timeout_s: float,
     push: PushTarget | None,
+    user_token: str = "",
 ) -> RemoteResult:
     """Send one message to an agent (async implementation).
 
@@ -101,6 +122,7 @@ async def _send(
         timeout_s (float): HTTP timeout in seconds for each call.
         push (PushTarget | None): Webhook to register. Used only if the agent's card advertises
             push notifications; otherwise the call blocks.
+        user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
 
     Returns:
         RemoteResult: The reply (blocking call) or the pending task id (push call).
@@ -109,7 +131,7 @@ async def _send(
         RuntimeError: If the agent returns no task, or a blocking task ends in a state other than completed.
         httpx.HTTPError: If the agent cannot be reached or times out.
     """
-    async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks()) as http:
+    async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks(), auth=request_auth()) as http:
         card = await A2ACardResolver(http, url).get_agent_card()
         client = ClientFactory(ClientConfig(streaming=False, httpx_client=http)).create(card)
         use_push = push is not None and card.capabilities.push_notifications
@@ -128,7 +150,7 @@ async def _send(
                 parts=[new_text_part(text), new_data_part({"history": history})],
             ),
             configuration=configuration,
-            metadata={"customer_id": customer_id, "thread_id": thread_id},
+            metadata=_request_metadata(customer_id, thread_id, user_token),
         )
         task = None
         async for response in client.send_message(request):
@@ -155,6 +177,7 @@ def call_remote_agent(
     thread_id: str,
     timeout_s: float,
     push: PushTarget | None = None,
+    user_token: str = "",
 ) -> RemoteResult:
     """Send one message to a remote A2A agent (blocking until the agent answers the request).
 
@@ -167,6 +190,7 @@ def call_remote_agent(
         timeout_s (float): HTTP timeout in seconds for each call.
         push (PushTarget | None): Webhook for push notifications; ignored by agents that do not
             advertise the capability.
+        user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
 
     Returns:
         RemoteResult: ``reply`` set for a normal call, ``pending=True`` when the result will be pushed.
@@ -175,7 +199,7 @@ def call_remote_agent(
         RuntimeError: If the task does not complete (blocking call) or no task comes back.
         httpx.HTTPError: If the agent cannot be reached or times out.
     """
-    return asyncio.run(_send(url, text, history, customer_id, thread_id, timeout_s, push))
+    return asyncio.run(_send(url, text, history, customer_id, thread_id, timeout_s, push, user_token))
 
 
 async def fetch_task(url: str, task_id: str, timeout_s: float) -> Task:
@@ -194,7 +218,7 @@ async def fetch_task(url: str, task_id: str, timeout_s: float) -> Task:
     Raises:
         httpx.HTTPError: If the agent cannot be reached or times out.
     """
-    async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks()) as http:
+    async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks(), auth=request_auth()) as http:
         card = await A2ACardResolver(http, url).get_agent_card()
         client = ClientFactory(ClientConfig(streaming=False, httpx_client=http)).create(card)
         task = await client.get_task(GetTaskRequest(id=task_id))
@@ -243,6 +267,7 @@ async def _stream(
     thread_id: str,
     timeout_s: float,
     push: PushTarget | None,
+    user_token: str = "",
 ) -> AsyncIterator[RemoteEvent]:
     """Send one message with streaming and yield the agent's events (async implementation).
 
@@ -254,6 +279,7 @@ async def _stream(
         thread_id (str): Conversation thread id; used as the A2A ``contextId``.
         timeout_s (float): HTTP timeout in seconds (also the longest silence tolerated on the stream).
         push (PushTarget | None): Webhook to register as a fallback; used only if the card advertises push.
+        user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
 
     Yields:
         RemoteEvent: ``started`` first, then ``progress`` / ``answer`` events and a final ``state``.
@@ -261,7 +287,7 @@ async def _stream(
     Raises:
         httpx.HTTPError: If the agent cannot be reached or the stream breaks.
     """
-    async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks()) as http:
+    async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks(), auth=request_auth()) as http:
         card = await A2ACardResolver(http, url).get_agent_card()
         client = ClientFactory(ClientConfig(streaming=card.capabilities.streaming, httpx_client=http)).create(card)
         use_push = push is not None and card.capabilities.push_notifications
@@ -280,7 +306,7 @@ async def _stream(
                 parts=[new_text_part(text), new_data_part({"history": history})],
             ),
             configuration=configuration,
-            metadata={"customer_id": customer_id, "thread_id": thread_id},
+            metadata=_request_metadata(customer_id, thread_id, user_token),
         )
         async for response in client.send_message(request):
             if response.HasField("task"):
@@ -304,6 +330,7 @@ def stream_remote_agent(
     thread_id: str,
     timeout_s: float,
     push: PushTarget | None = None,
+    user_token: str = "",
 ) -> Iterator[RemoteEvent]:
     """Send one message to a remote A2A agent and yield its events as they arrive (blocking iterator).
 
@@ -318,6 +345,7 @@ def stream_remote_agent(
         timeout_s (float): HTTP timeout in seconds.
         push (PushTarget | None): Webhook for push notifications, used as a fallback if the stream
             breaks; ignored by agents that do not advertise the capability.
+        user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
 
     Yields:
         RemoteEvent: Events in the order the agent produced them.
@@ -326,7 +354,7 @@ def stream_remote_agent(
         httpx.HTTPError: If the agent cannot be reached or the stream breaks mid-way.
     """
     loop = asyncio.new_event_loop()
-    events = _stream(url, text, history, customer_id, thread_id, timeout_s, push)
+    events = _stream(url, text, history, customer_id, thread_id, timeout_s, push, user_token)
     try:
         while True:
             try:

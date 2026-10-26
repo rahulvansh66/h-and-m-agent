@@ -40,11 +40,13 @@ from langgraph.graph.state import CompiledStateGraph
 from starlette.applications import Starlette
 
 from hm_agent.a2a.chunks import Chunk, answer, progress
-from hm_agent.core.settings import TRACING_TAGS
+from hm_agent.auth import USER_TOKEN_METADATA_KEY, AuthError, verify_token
+from hm_agent.core.settings import TRACING_TAGS, auth_enabled
 
 logger = logging.getLogger(__name__)
 
 RPC_PATH = "/"  # JSON-RPC endpoint; the Agent Card tells clients where it is
+REJECTED_MESSAGE = "The agent could not process this request."  # generic on purpose: no hint about why
 TOKEN_FLUSH_CHARS = 24  # LLM tokens are grouped into pieces of at least this size, one A2A event per piece
 
 # Runner signature: (latest user text, prior messages, customer_id, thread_id) -> stream of chunks.
@@ -155,6 +157,10 @@ class RunnerExecutor(AgentExecutor):
         ``working`` status update with a message; ``answer`` chunks become appends to one artifact,
         the last of them flagged ``last_chunk``. A runner failure marks the task ``failed``.
 
+        When auth is enabled the user token in the request metadata is verified first and its
+        customer id must equal the metadata ``customer_id``; the verified id is what the runner gets.
+        A missing, invalid or mismatching token marks the task ``failed`` without running the agent.
+
         Args:
             context (RequestContext): Incoming message, task id, context id and request metadata.
             event_queue (EventQueue): Queue the task events are published to.
@@ -171,6 +177,12 @@ class RunnerExecutor(AgentExecutor):
         history = data[0].get("history", []) if data else []
         customer_id = context.metadata.get("customer_id", "")
         thread_id = context.metadata.get("thread_id", context_id)
+        if auth_enabled():
+            verified = await self._verify_customer(context, customer_id, task_id)
+            if verified is None:
+                await updater.failed(new_text_message(REJECTED_MESSAGE))
+                return
+            customer_id = verified
         logger.info(
             "agent=%s status=start task_id=%s context_id=%s customer_id=%s history=%d",
             self._agent, task_id, context_id, customer_id, len(history),
@@ -229,6 +241,30 @@ class RunnerExecutor(AgentExecutor):
             "agent=%s status=complete task_id=%s context_id=%s duration_s=%.2f chunks=%d reply_chars=%d",
             self._agent, task_id, context_id, time.perf_counter() - start, events, reply_chars,
         )
+
+    async def _verify_customer(self, context: RequestContext, claimed_id: str, task_id: str) -> str | None:
+        """Verify the user token of a request and check it belongs to the claimed customer.
+
+        Args:
+            context (RequestContext): Incoming request; its metadata may carry the user token.
+            claimed_id (str): ``customer_id`` the caller put in the request metadata.
+            task_id (str): Task id, for log correlation.
+
+        Returns:
+            str | None: The verified customer id, or None when the token is missing, invalid or
+            belongs to a different customer than ``claimed_id``.
+        """
+        token = context.metadata.get(USER_TOKEN_METADATA_KEY, "")
+        try:
+            # The first call may fetch the signing keys over the network, so keep it off the event loop.
+            verified = await asyncio.to_thread(verify_token, token)
+        except AuthError as exc:
+            logger.warning("agent=%s status=auth_rejected task_id=%s reason=%s", self._agent, task_id, exc.reason)
+            return None
+        if verified.customer_id != claimed_id:
+            logger.warning("agent=%s status=auth_rejected task_id=%s reason=customer_mismatch", self._agent, task_id)
+            return None
+        return verified.customer_id
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Cancel a task. Runs are short and blocking, so cancellation only marks the task cancelled.

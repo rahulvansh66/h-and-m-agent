@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 
 from hm_agent.a2a.chunks import Chunk, answer, progress
+from hm_agent.core.db import fetch_one
 from hm_agent.core.settings import SHIPMENT_CARRIER_DELAY_S
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,29 @@ _SCENARIOS: tuple[tuple[str, str, str], ...] = (
     ("UPS", "Rotterdam depot", "Held at the depot, delivery attempt scheduled for tomorrow"),
     ("DB Schenker", "H&M central warehouse, Hamburg", "Packed and handed over to the carrier, pickup pending"),
 )
+
+
+def order_belongs_to_customer(order_id: str, customer_id: str) -> bool:
+    """Check that an order exists and belongs to the given customer.
+
+    Gate in front of the carrier lookup: the order id comes from the customer's message, so without this
+    check any customer could look up another customer's shipment by typing its id.
+
+    Args:
+        order_id (str): Order id such as ``ORD-1007`` (case-insensitive).
+        customer_id (str): Verified customer id from the run config.
+
+    Returns:
+        bool: True only if the order is recorded for that customer; False for unknown orders, other
+        customers' orders and an empty ``customer_id``.
+    """
+    if not customer_id:
+        return False
+    row = fetch_one(
+        "SELECT 1 FROM order_management.orders WHERE order_id = %s AND customer_id = %s",
+        (order_id.upper(), customer_id),
+    )
+    return row is not None
 
 
 def _build_status(order_id: str) -> str:

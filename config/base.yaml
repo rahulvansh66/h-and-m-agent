@@ -45,6 +45,7 @@ a2a:
     fashion:
       port: 8004
   webhook_port: 8010              # supervisor-side receiver for push notifications from agents
+  push_receiver_enabled: true     # false = stream-only: no :8010 listener; a lost stream returns the apology (env PUSH_RECEIVER_ENABLED overrides)
 
 # FastAPI layer in front of the supervisor graph (python -m hm_agent.api).
 api:
@@ -55,15 +56,20 @@ api:
   rate_limit_per_min: 10          # chat requests per customer per minute (protects the Groq free tier)
   pool_max_size: 4                # Neon connections held for the checkpointer
 
+# AgentCore Runtime entrypoint of the supervisor (python -m hm_agent.runtime.entrypoint).
+runtime:
+  port: 8080                      # port the Runtime contract requires for the HTTP protocol
+  pool_max_size: 4                # Neon connections held for the checkpointer
+  max_message_chars: 2000         # longest customer message accepted
+
 # Dummy carrier lookup used by the shipment_tracking agent.
 shipment:
   carrier_delay_s: 20             # simulated wait for the carrier / warehouse system
 
 # End-user authentication: the OIDC access token the supervisor entrypoint and agents verify.
-# Off locally so today's unauthenticated behaviour is unchanged; deployments switch it on.
+# The issuer comes from env AUTH0_TENANT (.env). Off locally so today's unauthenticated behaviour is unchanged; deployments switch it on.
 auth:
   enabled: false                  # verify user tokens (env AUTH_ENABLED overrides)
-  issuer: https://example.auth0.com/  # token `iss`; JWKS is fetched from its discovery document
   audience: https://hm-agent/api  # token `aud` this service accepts
   customer_claim: https://hm-agent/customer_id  # namespaced claim carrying the verified customer id
   jwks_cache_ttl_s: 3600          # how long fetched signing keys are cached in memory

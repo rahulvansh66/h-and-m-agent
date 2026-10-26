@@ -19,12 +19,13 @@ from langchain_core.runnables import RunnableConfig
 from langfuse.langchain import CallbackHandler
 from langgraph.graph.state import CompiledStateGraph
 
+from hm_agent.auth import USER_TOKEN_CONFIG_KEY
 from hm_agent.core.settings import TRACING_TAGS
 
 logger = logging.getLogger(__name__)
 
 
-def build_config(customer_id: str, thread_id: str) -> RunnableConfig:
+def build_config(customer_id: str, thread_id: str, user_token: str | None = None) -> RunnableConfig:
     """Build the per-turn run config (thread, customer and Langfuse tracing metadata).
 
     A fresh ``CallbackHandler`` is created per turn so each turn is its own trace, while the
@@ -33,12 +34,17 @@ def build_config(customer_id: str, thread_id: str) -> RunnableConfig:
     Args:
         customer_id (str): Customer the conversation belongs to, e.g. ``cust001``.
         thread_id (str): Conversation thread id used by the checkpointer and Langfuse.
+        user_token (str | None): The end user's access token, forwarded to the agents so they can verify
+            it. Kept out of the checkpoint and Langfuse metadata; never log it.
 
     Returns:
         RunnableConfig: Config to pass to ``graph.stream`` / ``graph.invoke``.
     """
+    configurable = {"customer_id": customer_id, "thread_id": thread_id}
+    if user_token:
+        configurable[USER_TOKEN_CONFIG_KEY] = user_token
     return {
-        "configurable": {"customer_id": customer_id, "thread_id": thread_id},
+        "configurable": configurable,
         # The handler traces every graph node, LLM call and tool call of this turn.
         "callbacks": [CallbackHandler()],
         "run_name": "hm-supervisor",
@@ -50,7 +56,9 @@ def build_config(customer_id: str, thread_id: str) -> RunnableConfig:
     }
 
 
-def stream_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_id: str) -> Iterator[dict]:
+def stream_turn(
+    graph: CompiledStateGraph, query: str, customer_id: str, thread_id: str, user_token: str | None = None
+) -> Iterator[dict]:
     """Run one customer message through the graph and yield events as they happen.
 
     Args:
@@ -58,6 +66,7 @@ def stream_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_
         query (str): The customer's message for this turn.
         customer_id (str): Customer the conversation belongs to.
         thread_id (str): Conversation thread id; earlier turns are loaded from the checkpointer.
+        user_token (str | None): End user's access token to forward to the agents (None when auth is off).
 
     Yields:
         dict: Event dicts as described in the module docstring. The last one has ``type == "reply"``
@@ -65,7 +74,7 @@ def stream_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_
     """
     stream = graph.stream(
         {"messages": [HumanMessage(query)]},
-        build_config(customer_id, thread_id),
+        build_config(customer_id, thread_id, user_token),
         stream_mode=["updates", "custom"],
     )
     for mode, data in stream:

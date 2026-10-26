@@ -20,6 +20,7 @@ from langgraph.config import get_stream_writer
 
 from hm_agent.a2a.client import stream_remote_agent
 from hm_agent.a2a.push_receiver import COMPLETED_STATE, PendingTask, get_receiver
+from hm_agent.auth import USER_TOKEN_CONFIG_KEY
 from hm_agent.core.settings import A2A_HISTORY, A2A_TIMEOUT_S, agent_url
 from hm_agent.core.state import AgentState
 
@@ -52,13 +53,14 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
 
         Args:
             state (AgentState): Current supervisor state.
-            config (RunnableConfig): Run config carrying ``customer_id`` and ``thread_id``.
+            config (RunnableConfig): Run config carrying ``customer_id``, ``thread_id`` and, when auth is on, the user token.
 
         Returns:
             dict: ``{"messages": [AIMessage]}`` named after the agent.
         """
         configurable = config.get("configurable", {})
         customer_id, thread_id = configurable.get("customer_id", ""), configurable.get("thread_id", "")
+        user_token = configurable.get(USER_TOKEN_CONFIG_KEY, "")  # lets the agent verify the user; never logged
         messages = state["messages"]
         latest = messages[-1].text
         # Prior turns only; the latest message travels separately as the text part.
@@ -73,7 +75,14 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         start = time.perf_counter()
         try:
             events = stream_remote_agent(
-                url, latest, history, customer_id, thread_id, A2A_TIMEOUT_S, push=receiver.target if receiver else None
+                url,
+                latest,
+                history,
+                customer_id,
+                thread_id,
+                A2A_TIMEOUT_S,
+                push=receiver.target if receiver else None,
+                user_token=user_token,
             )
             for event in events:
                 if event.kind == "started":

@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
 
-from hm_agent.core.settings import DEFAULT_CUSTOMER_ID
+from hm_agent.core.settings import DEFAULT_CUSTOMER_ID, auth_enabled
 
 CUSTOMER_ID_ARG = "customer_id"
 
@@ -28,7 +28,8 @@ async def inject_customer_id(
     """Tool-call interceptor that sets ``customer_id`` from the run config.
 
     Any value the model supplied is discarded. Falls back to the default customer when the
-    config carries none, matching the CLI default.
+    config carries none, matching the local CLI default; with auth enabled there is no fallback,
+    so a missing id can never silently become another customer's data.
 
     Args:
         request: The outgoing MCP tool call; ``request.runtime`` holds the LangGraph runtime.
@@ -36,9 +37,16 @@ async def inject_customer_id(
 
     Returns:
         MCPToolCallResult: The tool result from the MCP server.
+
+    Raises:
+        PermissionError: If auth is enabled and the run config carries no customer id.
     """
     config = getattr(request.runtime, "config", None) or {}
-    customer_id = config.get("configurable", {}).get(CUSTOMER_ID_ARG, DEFAULT_CUSTOMER_ID)
+    customer_id = config.get("configurable", {}).get(CUSTOMER_ID_ARG)
+    if not customer_id:
+        if auth_enabled():
+            raise PermissionError("no verified customer id in the run config")
+        customer_id = DEFAULT_CUSTOMER_ID
     return await handler(request.override(args={**request.args, CUSTOMER_ID_ARG: customer_id}))
 
 

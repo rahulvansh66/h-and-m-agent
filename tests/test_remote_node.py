@@ -111,3 +111,23 @@ def test_failed_task_returns_apology_and_ignores_webhook(setup) -> None:
     out = run([RemoteEvent("started", task_id="task-4", push_registered=True), RemoteEvent("state", state="TASK_STATE_FAILED")])
     assert out["messages"][0].text == remote_node.UNAVAILABLE_REPLY
     assert receiver.streamed == ["task-4"] and receiver.registered == []
+
+
+def test_user_token_from_run_config_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The token in the run config reaches the client call; without one an empty token is passed."""
+    from hm_agent.auth import USER_TOKEN_CONFIG_KEY
+
+    seen: list[str] = []
+
+    def fake_stream(*args, user_token="", **kwargs):
+        seen.append(user_token)
+        yield RemoteEvent("state", state=COMPLETED_STATE)
+
+    monkeypatch.setattr(remote_node, "get_receiver", lambda: None)
+    monkeypatch.setattr(remote_node, "get_stream_writer", lambda: lambda event: None)
+    monkeypatch.setattr(remote_node, "stream_remote_agent", fake_stream)
+    node = remote_node.make_remote_agent_node(AGENT)
+    state = {"messages": [HumanMessage("hi")]}
+    node(state, {"configurable": {"customer_id": "cust001", "thread_id": "t1", USER_TOKEN_CONFIG_KEY: "tok"}})
+    node(state, {"configurable": {"customer_id": "cust001", "thread_id": "t1"}})
+    assert seen == ["tok", ""]

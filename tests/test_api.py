@@ -83,7 +83,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
     """
     monkeypatch.setenv(deps.API_KEY_ENV, KEY)
     monkeypatch.setattr(
-        turns, "build_config", lambda customer_id, thread_id: {"configurable": {"customer_id": customer_id, "thread_id": thread_id}}
+        turns, "build_config", lambda customer_id, thread_id, user_token=None: {"configurable": {"customer_id": customer_id, "thread_id": thread_id}}
     )
     services = Services(graph=FakeGraph(), limiter=RateLimiter(limit=100), hub=PushEventHub(asyncio.new_event_loop()))
     with TestClient(create_app(services)) as test_client:

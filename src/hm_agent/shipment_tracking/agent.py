@@ -11,11 +11,12 @@ import re
 from collections.abc import Iterator
 
 from hm_agent.a2a.chunks import Chunk, answer
-from hm_agent.shipment_tracking.tools import stream_carrier_status
+from hm_agent.shipment_tracking.tools import order_belongs_to_customer, stream_carrier_status
 
 logger = logging.getLogger(__name__)
 
 ORDER_ID_PATTERN = re.compile(r"\bORD-\d+\b", re.IGNORECASE)
+ORDER_NOT_FOUND_REPLY = "I couldn't find that order on your account. Please check the order id and try again."
 ASK_FOR_ORDER_REPLY = "Which order should I track? Please send the order id, for example ORD-1007."
 
 
@@ -45,16 +46,21 @@ def shipment_runner(text: str, history: list[dict], customer_id: str, thread_id:
     Args:
         text (str): Latest customer message.
         history (list[dict]): Prior messages as ``{"role", "text", "name"}`` dicts, oldest first.
-        customer_id (str): Customer the conversation belongs to (only logged).
+        customer_id (str): Verified customer the conversation belongs to; the order must be theirs.
         thread_id (str): Conversation thread id (only logged).
 
     Yields:
-        Chunk: Progress lines while the carrier is checked, then the status text (or the request
-        for an order id, when none was given) as the answer.
+        Chunk: Progress lines while the carrier is checked, then the status text as the answer. A
+        single answer chunk instead when no order id was given or the order is not the customer's.
     """
     order_id = find_order_id(text, history)
     if order_id is None:
         logger.info("agent=shipment_tracking step=no_order_id thread_id=%s customer_id=%s", thread_id, customer_id)
         yield answer(ASK_FOR_ORDER_REPLY)
+        return
+    if not order_belongs_to_customer(order_id, customer_id):
+        # Same reply for "unknown" and "someone else's", so it does not reveal that an order exists.
+        logger.warning("agent=shipment_tracking step=order_not_owned thread_id=%s", thread_id)
+        yield answer(ORDER_NOT_FOUND_REPLY)
         return
     yield from stream_carrier_status(order_id)

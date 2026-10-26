@@ -12,14 +12,15 @@ from hm_agent.a2a.server import build_a2a_app, graph_runner
 from hm_agent.customer_support.agent import build_customer_support_agent
 from hm_agent.core.config import REPO_ROOT
 from hm_agent.core.logging_setup import configure_logging
-from hm_agent.core.settings import A2A_HOST, agent_port
+from hm_agent.core.settings import bind_address
 from hm_agent.core.state import CUSTOMER_SUPPORT
 
 
 def main() -> None:
-    """Start the customer support agent service on its configured port."""
+    """Start the customer support agent service on its configured port (or the ``A2A_BIND_*`` override)."""
     load_dotenv(REPO_ROOT / ".env")
     configure_logging(f"a2a-{CUSTOMER_SUPPORT}")
+    host, port = bind_address(CUSTOMER_SUPPORT)  # local defaults; A2A_BIND_HOST / A2A_BIND_PORT override for Runtime
     # The answer is generated as structured output and checked for citations (and possibly retried), so
     # it is sent whole once validated; only step progress is streamed.
     runner = graph_runner(
@@ -27,7 +28,7 @@ def main() -> None:
         CUSTOMER_SUPPORT,
         progress_labels={"condense_query": "Understood your question", "rag": "Searched the help articles"},
     )
-    uvicorn.run(build_a2a_app(build_agent_card(CUSTOMER_SUPPORT), CUSTOMER_SUPPORT, runner), host=A2A_HOST, port=agent_port(CUSTOMER_SUPPORT), log_level="info")
+    uvicorn.run(build_a2a_app(build_agent_card(CUSTOMER_SUPPORT), CUSTOMER_SUPPORT, runner), host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

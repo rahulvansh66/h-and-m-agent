@@ -12,6 +12,23 @@ from datetime import datetime, timezone
 import httpx
 
 WIRE_LOG_ENV = "A2A_WIRE_LOG"  # path of the optional JSONL wire log
+REDACTED_KEYS = frozenset({"user_token"})  # secrets that must never reach the log file
+
+
+def _redact(value: object) -> object:
+    """Replace the values of secret keys anywhere inside parsed JSON.
+
+    Args:
+        value (object): Parsed JSON (dict, list or scalar).
+
+    Returns:
+        object: Copy with every ``REDACTED_KEYS`` value replaced by ``"***"``.
+    """
+    if isinstance(value, dict):
+        return {k: "***" if k in REDACTED_KEYS else _redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
 
 
 def _write_wire(direction: str, url: str, body: str, status: int | None = None) -> None:
@@ -35,7 +52,7 @@ def _write_wire(direction: str, url: str, body: str, status: int | None = None) 
         "dir": direction,
         "url": url,
         "http_status": status,
-        "body": parsed,
+        "body": _redact(parsed),
     }
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")

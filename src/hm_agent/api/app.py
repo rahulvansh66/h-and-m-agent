@@ -28,6 +28,7 @@ from hm_agent.core.settings import (
     API_CORS_ORIGINS,
     API_POOL_MAX_SIZE,
     API_RATE_LIMIT_PER_MIN,
+    push_receiver_enabled,
 )
 from hm_agent.graph import build_graph
 
@@ -95,15 +96,18 @@ def create_app(services: Services | None = None) -> FastAPI:
             )
             app.state.services = built
             # Receives push notifications from agents whose stream broke and delivers their results.
-            receiver = PushReceiver(A2A_WEBHOOK_PORT, _make_deliver(built))
-            receiver.start()
-            set_receiver(receiver)
+            receiver: PushReceiver | None = None
+            if push_receiver_enabled():
+                receiver = PushReceiver(A2A_WEBHOOK_PORT, _make_deliver(built))
+                receiver.start()
+                set_receiver(receiver)
             logger.info("component=api status=started")
             try:
                 yield
             finally:
-                set_receiver(None)
-                receiver.stop()
+                if receiver is not None:
+                    set_receiver(None)
+                    receiver.stop()
                 get_client().flush()
 
     app = FastAPI(title="H&M Assistant API", version="0.1.0", lifespan=lifespan)

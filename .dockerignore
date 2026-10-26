@@ -1,0 +1,22 @@
+# Secrets and local-only folders never enter the build context.
+.env
+.env.*
+!.env.example
+.tmp/
+ref/
+
+# Not needed at run time.
+.git/
+.venv/
+.vscode/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+data/
+DOCS/
+experiments/
+infra/
+scripts/
+tests/
+README.md

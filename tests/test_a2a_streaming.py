@@ -117,3 +117,94 @@ def test_chunk_helpers() -> None:
     """The helper constructors set the right kind."""
     assert progress("a") == Chunk("progress", "a")
     assert answer("b") == Chunk("answer", "b")
+
+
+@pytest.fixture
+def auth_on(monkeypatch: pytest.MonkeyPatch):
+    """Switch agent-side token verification on with a fake verifier.
+
+    The fake accepts the token ``good-<customer>`` and rejects everything else.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Used to replace the server's auth hooks.
+    """
+    from hm_agent.a2a import server
+    from hm_agent.auth import AuthError, VerifiedUser
+
+    def fake_verify(token: str) -> VerifiedUser:
+        if not token.startswith("good-"):
+            raise AuthError("invalid_token")
+        return VerifiedUser(customer_id=token.removeprefix("good-"))
+
+    monkeypatch.setattr(server, "auth_enabled", lambda: True)
+    monkeypatch.setattr(server, "verify_token", fake_verify)
+
+
+def run_stream(token: str, customer_id: str = "cust001") -> list:
+    """Stream one message to the served fake agent, claiming ``customer_id`` with ``token``.
+
+    Args:
+        token (str): User token to forward ("" sends none).
+        customer_id (str): Customer id placed in the request metadata.
+
+    Returns:
+        list: The events the client received.
+    """
+    return list(a2a_client.stream_remote_agent(AGENT_URL, "hi", [], customer_id, "t1", 10, user_token=token))
+
+
+def test_matching_token_runs_the_agent(serve, auth_on) -> None:
+    """A token for the claimed customer is accepted and the agent runs for that customer."""
+    serve(fake_runner)
+    events = run_stream("good-cust001")
+    assert events[-1].state == "TASK_STATE_COMPLETED"
+    assert "".join(e.text for e in events if e.kind == "answer").endswith("cust001/t1")
+
+
+def test_token_for_another_customer_is_rejected(serve, auth_on) -> None:
+    """A valid token for cust002 cannot be used to act as cust001: the task fails and the agent never runs."""
+    serve(fake_runner)
+    events = run_stream("good-cust002", customer_id="cust001")
+    assert [e.kind for e in events if e.kind == "answer"] == []
+    assert events[-1].state == "TASK_STATE_FAILED"
+
+
+def test_missing_token_is_rejected_when_auth_is_enabled(serve, auth_on) -> None:
+    """No token at all fails the task when auth is on."""
+    serve(fake_runner)
+    assert run_stream("")[-1].state == "TASK_STATE_FAILED"
+
+
+def test_missing_token_is_fine_when_auth_is_disabled(serve) -> None:
+    """With auth off (the local default) behaviour is unchanged: no token needed."""
+    serve(fake_runner)
+    assert run_stream("")[-1].state == "TASK_STATE_COMPLETED"
+
+
+def test_wire_log_redacts_the_user_token(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The optional wire log never records the user token."""
+    from hm_agent.a2a import wire_log
+
+    log = tmp_path / "wire.jsonl"
+    monkeypatch.setenv(wire_log.WIRE_LOG_ENV, str(log))
+    wire_log._write_wire("C->S", "POST http://x", '{"params": {"metadata": {"user_token": "secret-abc", "customer_id": "c"}}}')
+    text = log.read_text(encoding="utf-8")
+    assert "secret-abc" not in text and "customer_id" in text
+
+
+def test_bind_address_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local defaults are the configured host and per-agent port; env vars override them for Runtime."""
+    from hm_agent.core import settings
+
+    monkeypatch.delenv("A2A_BIND_HOST", raising=False)
+    monkeypatch.delenv("A2A_BIND_PORT", raising=False)
+    assert settings.bind_address(ORDER_MANAGEMENT) == (settings.A2A_HOST, settings.agent_port(ORDER_MANAGEMENT))
+    monkeypatch.setenv("A2A_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("A2A_BIND_PORT", "9000")
+    assert settings.bind_address(ORDER_MANAGEMENT) == ("0.0.0.0", 9000)
+
+
+def test_card_advertises_the_configured_agent_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Agent Card URL follows ``<AGENT>_AGENT_URL``, independent of the bind address."""
+    monkeypatch.setenv("FASHION_AGENT_URL", "https://runtime.example/agent/")
+    assert build_agent_card(FASHION).supported_interfaces[0].url == "https://runtime.example/agent"

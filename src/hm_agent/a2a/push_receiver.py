@@ -28,7 +28,7 @@ from starlette.routing import Route
 
 from hm_agent.a2a.client import PushTarget, fetch_task, task_reply
 from hm_agent.a2a.wire_log import log_push_notification
-from hm_agent.core.settings import A2A_HOST, A2A_TIMEOUT_S
+from hm_agent.core.settings import A2A_HOST, A2A_TIMEOUT_S, push_receiver_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +266,7 @@ def get_receiver() -> PushReceiver | None:
     """Return the process-wide receiver.
 
     Returns:
-        PushReceiver | None: The installed receiver, or None when push notifications are not set up.
+        PushReceiver | None: The installed receiver, or None when push notifications are not set up
+        or disabled by the ``push_receiver_enabled`` setting.
     """
-    return _receiver
+    return _receiver if push_receiver_enabled() else None

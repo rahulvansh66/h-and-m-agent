@@ -36,3 +36,47 @@ def test_mark_streamed_discards_early_terminal_notification() -> None:
     receiver.mark_streamed("task-1")
     assert "task-1" not in receiver._finished_early
     assert "task-1" in receiver._claimed
+
+
+def test_disabled_receiver_means_no_receiver_and_stream_only_shipment_turn(monkeypatch) -> None:
+    """With the receiver disabled ``get_receiver`` is None, nothing registers a webhook, and the streamed turn completes."""
+    from hm_agent.a2a import push_receiver, remote_node
+    from hm_agent.a2a.client import RemoteEvent
+    from langchain_core.messages import HumanMessage
+
+    receiver = PushReceiver(port=0, deliver=lambda task, text: None)
+    push_receiver.set_receiver(receiver)
+    try:
+        monkeypatch.setenv("PUSH_RECEIVER_ENABLED", "false")
+        assert push_receiver.get_receiver() is None
+        monkeypatch.delenv("PUSH_RECEIVER_ENABLED")
+        assert push_receiver.get_receiver() is receiver  # default (enabled) unchanged
+        monkeypatch.setenv("PUSH_RECEIVER_ENABLED", "false")
+
+        pushes: list = []
+
+        def fake_stream(*args, push=None, **kwargs):
+            pushes.append(push)
+            yield RemoteEvent("started", task_id="t-1", push_registered=False)
+            yield RemoteEvent("progress", text="Contacting the carrier")
+            yield RemoteEvent("answer", text="Order ORD-1007 is in transit.")
+            yield RemoteEvent("state", state=push_receiver.COMPLETED_STATE)
+
+        monkeypatch.setattr(remote_node, "get_stream_writer", lambda: lambda event: None)
+        monkeypatch.setattr(remote_node, "stream_remote_agent", fake_stream)
+        node = remote_node.make_remote_agent_node("shipment_tracking")
+        config = {"configurable": {"customer_id": "cust001", "thread_id": "t1"}}
+        out = node({"messages": [HumanMessage("Where is ORD-1007?")]}, config)
+        assert out["messages"][0].text == "Order ORD-1007 is in transit."
+        assert pushes == [None]
+
+        # A lost stream has nothing to fall back to: the user gets the apology.
+        def broken_stream(*args, **kwargs):
+            yield RemoteEvent("started", task_id="t-2", push_registered=False)
+            raise ConnectionError("dropped")
+
+        monkeypatch.setattr(remote_node, "stream_remote_agent", broken_stream)
+        out = node({"messages": [HumanMessage("Where is ORD-1007?")]}, config)
+        assert out["messages"][0].text == remote_node.UNAVAILABLE_REPLY
+    finally:
+        push_receiver.set_receiver(None)

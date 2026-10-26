@@ -35,8 +35,10 @@ API_CORS_ORIGINS = _CONFIG["api"]["cors_origins"]
 API_MAX_MESSAGE_CHARS = _CONFIG["api"]["max_message_chars"]
 API_RATE_LIMIT_PER_MIN = _CONFIG["api"]["rate_limit_per_min"]
 API_POOL_MAX_SIZE = _CONFIG["api"]["pool_max_size"]
+RUNTIME_PORT = _CONFIG["runtime"]["port"]  # port of the AgentCore entrypoint
+RUNTIME_POOL_MAX_SIZE = _CONFIG["runtime"]["pool_max_size"]
+RUNTIME_MAX_MESSAGE_CHARS = _CONFIG["runtime"]["max_message_chars"]
 A2A_PORTS = {name: spec["port"] for name, spec in _CONFIG["a2a"]["agents"].items()}  # agent name -> port
-AUTH_ISSUER = _CONFIG["auth"]["issuer"]  # expected token `iss`
 AUTH_AUDIENCE = _CONFIG["auth"]["audience"]  # expected token `aud`
 AUTH_CUSTOMER_CLAIM = _CONFIG["auth"]["customer_claim"]  # namespaced claim holding the customer id
 AUTH_JWKS_CACHE_TTL_S = _CONFIG["auth"]["jwks_cache_ttl_s"]  # in-memory signing-key cache lifetime
@@ -72,6 +74,39 @@ def auth_enabled() -> bool:
     return _flag("AUTH_ENABLED", _CONFIG["auth"]["enabled"])
 
 
+def auth_issuer() -> str:
+    """Return the token issuer (``iss``) derived from the ``AUTH0_TENANT`` environment variable.
+
+    Read at call time because ``.env`` is loaded after this module is imported. Accepts a bare
+    domain (``tenant.us.auth0.com``) or a full URL; the result always has the ``https://`` scheme
+    and a trailing slash, which is how Auth0 writes ``iss`` in its tokens.
+
+    Returns:
+        str: Issuer URL such as ``https://tenant.us.auth0.com/``.
+
+    Raises:
+        RuntimeError: If ``AUTH0_TENANT`` is unset or empty.
+    """
+    tenant = os.environ.get("AUTH0_TENANT", "").strip()
+    if not tenant:
+        raise RuntimeError("AUTH0_TENANT is not set; it is required to verify user tokens")
+    if "://" not in tenant:
+        tenant = f"https://{tenant}"
+    return tenant.rstrip("/") + "/"
+
+
+def push_receiver_enabled() -> bool:
+    """Return whether the supervisor runs the push-notification webhook receiver.
+
+    Off means stream-only: nothing listens on the webhook port, no webhook is registered with agents,
+    and a stream that breaks mid-task ends with the "try again" reply instead of a later push.
+
+    Returns:
+        bool: ``a2a.push_receiver_enabled``, overridable with env ``PUSH_RECEIVER_ENABLED``.
+    """
+    return _flag("PUSH_RECEIVER_ENABLED", _CONFIG["a2a"]["push_receiver_enabled"])
+
+
 def sigv4_enabled() -> bool:
     """Return whether A2A requests are SigV4-signed (``aws.sigv4_enabled`` or env ``SIGV4_ENABLED``).
 
@@ -93,12 +128,35 @@ def agent_port(agent: str) -> int:
     return A2A_PORTS[agent]
 
 
+def bind_address(agent: str) -> tuple[str, int]:
+    """Return the ``(host, port)`` an agent service should listen on.
+
+    Defaults to the local interface and the agent's configured port, so ``scripts/a2a/run_agents.py``
+    is unchanged. AgentCore Runtime needs ``0.0.0.0:9000``, which a deployment sets with the
+    ``A2A_BIND_HOST`` and ``A2A_BIND_PORT`` environment variables (read at call time, after ``.env`` is loaded).
+
+    Args:
+        agent (str): Agent name, e.g. ``order_management``.
+
+    Returns:
+        tuple[str, int]: Interface and port to pass to ``uvicorn.run``.
+
+    Raises:
+        ValueError: If ``A2A_BIND_PORT`` is set but is not an integer.
+    """
+    host = os.environ.get("A2A_BIND_HOST", "").strip() or A2A_HOST
+    port = os.environ.get("A2A_BIND_PORT", "").strip()
+    return host, int(port) if port else A2A_PORTS[agent]
+
+
 def agent_url(agent: str) -> str:
     """Return the base URL of an agent service.
 
     The env var ``<AGENT>_AGENT_URL`` (e.g. ``ORDER_MANAGEMENT_AGENT_URL``) overrides the
     config-derived local URL, so a deployment can point the supervisor at remote hosts. It is read
-    at call time because ``.env`` is loaded after this module is imported.
+    at call time because ``.env`` is loaded after this module is imported. The same value is the
+    address an agent's own Agent Card advertises, so a deployed agent must have it set to its public
+    address (the bind address from ``bind_address`` is only where it listens).
 
     Args:
         agent (str): Agent name, e.g. ``order_management``.
@@ -138,14 +196,19 @@ __all__ = [
     "API_MAX_MESSAGE_CHARS",
     "API_RATE_LIMIT_PER_MIN",
     "API_POOL_MAX_SIZE",
+    "RUNTIME_PORT",
+    "RUNTIME_POOL_MAX_SIZE",
+    "RUNTIME_MAX_MESSAGE_CHARS",
     "A2A_PORTS",
-    "AUTH_ISSUER",
     "AUTH_AUDIENCE",
     "AUTH_CUSTOMER_CLAIM",
     "AUTH_JWKS_CACHE_TTL_S",
     "AWS_REGION",
     "auth_enabled",
+    "auth_issuer",
     "sigv4_enabled",
+    "push_receiver_enabled",
     "agent_port",
+    "bind_address",
     "agent_url",
 ]
