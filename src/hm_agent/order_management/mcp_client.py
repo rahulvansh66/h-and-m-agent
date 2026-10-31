@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 ORDER_SERVER = "order_management"
 # Passed to the server explicitly: stdio subprocesses only inherit a minimal environment by default.
-FORWARDED_ENV = ("NEON_POSTGRES_CONNECTION_STRING",)
+FORWARDED_ENV = ("NEON_POSTGRES_CONNECTION_STRING", "PYTHONPATH")  # PYTHONPATH: the container runs from /app/src
 
 
 def load_order_tools() -> list[BaseTool]:

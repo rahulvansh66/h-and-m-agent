@@ -31,7 +31,7 @@ COPY config ./config
 COPY src ./src
 
 # Run as an unprivileged user.
-RUN useradd --system --uid 1001 --no-create-home app
+RUN useradd --system --uid 1001 --create-home app
 USER app
 
 # ---- agent --------------------------------------------------------------------------------------
@@ -43,6 +43,7 @@ ARG AGENT
 ARG PRELOAD_EMBEDDING=false
 ENV AGENT=${AGENT} \
     FASTEMBED_CACHE_PATH=/opt/fastembed \
+    HF_HOME=/opt/fastembed/hf \
     # AgentCore Runtime requires 0.0.0.0:9000 for A2A agents.
     A2A_BIND_HOST=0.0.0.0 \
     A2A_BIND_PORT=9000
