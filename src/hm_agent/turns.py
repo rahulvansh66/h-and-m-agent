@@ -1,6 +1,6 @@
-"""One supervisor turn as a stream of events, shared by the CLI and the API.
+"""One supervisor turn as a stream of events, shared by the CLI and the runtime entrypoint.
 
-Role in the system: both front ends (``hm_agent.cli`` and ``hm_agent.api``) run a customer message
+Role in the system: both front ends (``hm_agent.cli`` and ``hm_agent.runtime``) run a customer message
 through the compiled supervisor graph the same way. This module builds the per-turn run config
 (thread, customer, Langfuse tracing) and turns ``graph.stream`` output into small event dicts:
 

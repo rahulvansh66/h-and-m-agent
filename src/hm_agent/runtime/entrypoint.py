@@ -36,7 +36,6 @@ from langfuse import get_client
 from langgraph.graph.state import CompiledStateGraph
 from starlette.applications import Starlette
 
-from hm_agent.api.service import history_messages, thread_owner
 from hm_agent.auth import AuthError, verify_token
 from hm_agent.core.config import REPO_ROOT
 from hm_agent.core.db import neon_checkpointer_pool
@@ -49,6 +48,7 @@ from hm_agent.core.settings import (
     auth_enabled,
 )
 from hm_agent.graph import build_graph
+from hm_agent.runtime.threads import history_messages, thread_owner
 from hm_agent.turns import stream_turn
 
 logger = logging.getLogger(__name__)

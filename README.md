@@ -2,7 +2,7 @@
 
 A multi-agent assistant for H&M, built with LangGraph. A supervisor reads each
 message and routes it to one of four sub-agents. The agents
-run as separate A2A services, and a FastAPI layer exposes the assistant over HTTP with streaming.
+run as separate A2A services, and an AgentCore-style entrypoint exposes the assistant over HTTP with streaming.
 
 ```
 START -> supervisor -> order_management  -> END   (own orders and purchases, via MCP SQL tools)
@@ -37,7 +37,6 @@ cp .env.example .env        # then fill in the values
 | `NEON_POSTGRES_CONNECTION_STRING` | Order data and the conversation checkpointer |
 | `NEON_POSTGRES_TEST_CONNECTION_STRING` | Separate test database (`neondb_test`); tests never use the main DSN |
 | `QDRANT_ENDPOINT`, `QDRANT_API_KEY` | Vector store for the support knowledge base |
-| `API_KEY` | Shared secret clients send as `X-API-Key` to the FastAPI layer (the API refuses to start without it) |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Tracing |
 
 Seed the database (one schema per agent; `--reset` rebuilds, `--test` targets the test database):
@@ -116,28 +115,27 @@ If you build an API or UI on top, keep one stable `thread_id` per conversation a
 uv run python -m hm_agent.customer_support.rag "What happens if my package can't be delivered?"
 ```
 
-## HTTP API
+## Runtime entrypoint
 
-A FastAPI layer in front of the supervisor graph. Start the agent services first, then:
+`runtime/entrypoint.py` is the supervisor's front door, built with the AgentCore SDK (it replaced the
+earlier FastAPI layer). Start the agent services first, then:
 
 ```bash
-uv run python -m hm_agent.api
+RUNTIME_PORT=8090 uv run python -m hm_agent.runtime.entrypoint
+curl -N -X POST localhost:8090/invocations -H 'Content-Type: application/json'   -H 'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: local-session-000000000000000001'   -d '{"message": "Where is my order ORD-1001?", "customer_id": "cust001"}'
 ```
-
-Every `/v1` request needs `X-API-Key` (the `API_KEY` from `.env`) and `X-Customer-Id`. The server
-holds the customer id, so the model never chooses whose data is read. A thread belongs to the customer
-who created it; another customer gets 404. Host, port, CORS origins, pool size and the per-minute rate
-limit are under `api:` in `config/base.yaml`.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/chat` | Send one message and get the full reply (and the `thread_id`). |
-| `POST /v1/chat/stream` | Same, as server-sent events (progress and answer chunks). |
-| `GET /v1/threads/{id}/messages` | Conversation history of a thread. |
-| `GET /v1/threads/{id}/events` | Server-sent events for results pushed by agents after the fact. |
-| `GET /healthz`, `GET /readyz` | Liveness and readiness (database) checks. |
+| `POST /invocations` | `{"message": "..."}` runs one chat turn; `{"action": "history"}` reads the thread back. Streams JSON events and always ends with `done`. |
+| `GET /ping` | Health check. |
 
-Details: `DOCS/working-info/api/`.
+The runtime session id header is the conversation `thread_id`. With `AUTH_ENABLED=true` the customer id comes
+only from the verified Auth0 bearer token (the body's `customer_id` is ignored) and a thread belongs to the
+customer who created it. Port, pool size and message limit are under `runtime:` in `config/base.yaml`.
+
+`docker compose up --build` runs the supervisor (host port 8090) and the four agents as arm64 containers;
+secrets come from `.env` at run time.
 
 ## Tests
 
@@ -166,8 +164,9 @@ Secrets never go in the YAML files; they live in `.env`.
 src/hm_agent/
   cli.py            CLI entry point (single query and chat loop)
   graph.py          Supervisor graph assembly
-  turns.py          One-message turn logic shared by the CLI and the API
-  api/              FastAPI app, routes, auth, rate limit, thread locks and SSE
+  turns.py          One-message turn logic shared by the CLI and the runtime entrypoint
+  runtime/          AgentCore entrypoint (/invocations, /ping) and thread ownership/history helpers
+  auth/             Auth0 JWT verification and a standalone login app
   core/             Shared config, settings, LLM factory, logging, db and graph state
   supervisor/       Plans each request: one or more specialist agents, with sub-queries and sticky follow-ups
   order_management/ Agent, MCP server and client (injects customer_id), A2A service
@@ -175,7 +174,7 @@ src/hm_agent/
   shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service
   fashion/          Agent, MCP server and client (product search, styling guides), A2A service
   a2a/              Generic A2A server, client, cards, stream chunks, push receiver and supervisor remote node
-tests/              Unit and API tests (fakes, no live services)
+tests/              Unit and entrypoint tests (fakes, no live services)
 config/             base.yaml, dev.yaml
 scripts/            Database creation and query scripts, fashion/ingest_catalog.py, and a2a/run_agents.py (starts the agent services)
 DOCS/               Data documentation and code-reading guide

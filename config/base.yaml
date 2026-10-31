@@ -48,15 +48,6 @@ a2a:
   webhook_port: 8010              # supervisor-side receiver for push notifications from agents
   push_receiver_enabled: true     # false = stream-only: no :8010 listener; a lost stream returns the apology (env PUSH_RECEIVER_ENABLED overrides)
 
-# FastAPI layer in front of the supervisor graph (python -m hm_agent.api).
-api:
-  host: 127.0.0.1
-  port: 8000
-  cors_origins: []                # browser origins allowed to call the API (empty = none)
-  max_message_chars: 2000         # longest customer message accepted
-  rate_limit_per_min: 10          # chat requests per customer per minute (protects the Groq free tier)
-  pool_max_size: 4                # Neon connections held for the checkpointer
-
 # AgentCore Runtime entrypoint of the supervisor (python -m hm_agent.runtime.entrypoint).
 runtime:
   port: 8080                      # port the Runtime contract requires for the HTTP protocol
