@@ -56,8 +56,8 @@ def _run_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_id
 
     Progress lines from the agent are printed as they arrive. If the agent streams its reply, the
     pieces are printed as they come; otherwise the full reply is printed once the turn ends. When a
-    message is split between several agents their pieces would interleave, so each agent's full
-    reply is printed under its own label instead of streaming it.
+    message is split between several agents, progress lines carry the agent name and the merged
+    answer is printed once it is ready.
 
     Args:
         graph (CompiledStateGraph): Compiled supervisor graph with a checkpointer attached.
@@ -73,14 +73,11 @@ def _run_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_id
                 agents += 1
             elif event["type"] == "progress":
                 print(f"  ... [{event['agent']}] {event['text']}" if agents > 1 else f"  ... {event['text']}", flush=True)
-            elif event["type"] == "token" and agents <= 1:
+            elif event["type"] == "token":
                 print(event["text"] if streamed else f"\nassistant> {event['text']}", end="", flush=True)
                 streamed = True
             elif event["type"] == "reply":
-                if agents > 1:
-                    print(f"\nassistant ({event['agent']})> {event['text']}", flush=True)
-                else:
-                    print("" if streamed else f"\nassistant> {event['text']}", flush=True)
+                print("" if streamed else f"\nassistant> {event['text']}", flush=True)
 
 
 def _make_deliver(graph: CompiledStateGraph, interactive: bool) -> Callable[[PendingTask, str], None]:

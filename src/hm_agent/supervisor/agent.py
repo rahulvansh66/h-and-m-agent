@@ -12,13 +12,16 @@ import logging
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.graph import END
 from langgraph.types import Send
 
 from hm_agent.core.llm import load_model
 from hm_agent.core.settings import SUPERVISOR_HISTORY, SUPERVISOR_MAX_AGENTS, SUPERVISOR_STICKY_MAX_WORDS
 from hm_agent.core.state import (
     DEFAULT_AGENT,
+    MULTI_AGENT,
     OUT_OF_SCOPE,
+    SPECIALIST_AGENTS,
     AgentName,
     AgentState,
     AgentTask,
@@ -94,7 +97,10 @@ def _render_transcript(messages: list[AnyMessage]) -> str:
         if isinstance(m, HumanMessage):
             lines.append(f"Customer: {m.text}")
         else:
-            label = f"Assistant ({m.name})" if m.name else "Assistant"
+            if m.name == MULTI_AGENT:
+                label = f"Assistant (multi: {', '.join(m.additional_kwargs.get('agents', []))})"
+            else:
+                label = f"Assistant ({m.name})" if m.name else "Assistant"
             lines.append(f"{label}: {m.text}")
     return "\n".join(lines)
 
@@ -116,8 +122,8 @@ def _sticky_agent(messages: list[AnyMessage]) -> AgentName | None:
     if SUPERVISOR_STICKY_MAX_WORDS <= 0 or len(messages) < 2 or not isinstance(messages[-1], HumanMessage):
         return None
     previous = messages[-2]
-    if not isinstance(previous, AIMessage) or previous.name in (None, OUT_OF_SCOPE):
-        return None
+    if not isinstance(previous, AIMessage) or previous.name not in SPECIALIST_AGENTS:
+        return None  # no label, a decline, or a merged multi-agent answer: let the model decide
     text = messages[-1].text.strip().lower()
     if len(text.split()) > SUPERVISOR_STICKY_MAX_WORDS or not text.startswith(FOLLOW_UP_CUES):
         return None
@@ -156,28 +162,28 @@ def supervisor_node(state: AgentState) -> dict:
     (customer support): that agent's relevance gate handles off-topic text cheaply, whereas a wrong
     ``out_of_scope`` would turn a customer away.
 
-    Reads: ``messages``. Writes: ``tasks``.
+    Reads: ``messages``. Writes: ``tasks`` and an empty ``results`` (clears leftovers of an earlier turn).
 
     Args:
         state: Current graph state.
 
     Returns:
-        dict: ``{"tasks": list[AgentTask]}``.
+        dict: ``{"tasks": list[AgentTask], "results": []}``.
     """
     sticky = _sticky_agent(state["messages"])
     if sticky:
         logger.info("node=supervisor status=sticky agent=%s", sticky)
-        return {"tasks": [AgentTask(agent=sticky)]}
+        return {"tasks": [AgentTask(agent=sticky)], "results": []}
     llm = load_model("small").with_structured_output(SupervisorDecision)
     decision: SupervisorDecision | None = llm.invoke(
         [SystemMessage(SUPERVISOR_PROMPT), HumanMessage(_render_transcript(state["messages"]))]
     )
     if decision is None:
         logger.warning("node=supervisor status=no_decision fallback=%s", DEFAULT_AGENT)
-        return {"tasks": [AgentTask(agent=DEFAULT_AGENT)]}
+        return {"tasks": [AgentTask(agent=DEFAULT_AGENT)], "results": []}
     tasks = normalise_tasks(decision.tasks)
     logger.info("node=supervisor agents=%s reason=%s", ",".join(t.agent for t in tasks), decision.reason)
-    return {"tasks": tasks}
+    return {"tasks": tasks, "results": []}
 
 
 def route_to_agent(state: AgentState) -> list[Send]:
@@ -196,6 +202,23 @@ def route_to_agent(state: AgentState) -> list[Send]:
         list[Send]: One ``Send`` per task.
     """
     return [Send(t.agent, {"messages": state["messages"], "query": t.query}) for t in state["tasks"]]
+
+
+def route_after_agent(state: AgentState) -> str:
+    """Conditional edge after an agent node: merge on a split turn, otherwise finish.
+
+    A single-agent turn has no ``results``, so it ends exactly as before (which also keeps pushed
+    results, added to the thread as the agent's node, from triggering a merge).
+
+    Reads: ``results``. Writes: nothing.
+
+    Args:
+        state: Current graph state.
+
+    Returns:
+        str: ``"synthesize"`` when branch results exist, else ``END``.
+    """
+    return "synthesize" if state.get("results") else END
 
 
 def out_of_scope_node(state: AgentState, config: RunnableConfig) -> dict:

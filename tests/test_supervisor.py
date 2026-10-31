@@ -161,19 +161,48 @@ def test_sticky_first_turn_and_kill_switch(router, monkeypatch: pytest.MonkeyPat
     assert fake.calls == 2
 
 
-def test_turn_emits_one_agent_selected_per_task() -> None:
-    """The supervisor update becomes one agent_selected event per agent in the plan."""
+def test_sticky_ignores_a_merged_multi_agent_answer(router) -> None:
+    """After a merged answer there is no single agent to stay with, so the model decides."""
+    fake = router(_decision(AgentTask(agent="fashion")))
+    messages = [HumanMessage("hi"), AIMessage("merged", name="multi_agent"), HumanMessage("how long does it take?")]
+    supervisor.supervisor_node({"messages": messages})
+    assert fake.calls == 1
+
+
+def test_supervisor_clears_results_and_transcript_labels_multi_answer(router) -> None:
+    """Each turn starts with empty results, and a merged answer is labelled with the agents behind it."""
+    router(_decision(AgentTask(agent="fashion")))
+    assert supervisor.supervisor_node({"messages": [HumanMessage("hello")]})["results"] == []
+    merged = AIMessage("merged", name="multi_agent", additional_kwargs={"agents": ["fashion", "order_management"]})
+    assert "Assistant (multi: fashion, order_management): merged" in supervisor._render_transcript([merged])
+
+
+def test_route_after_agent_merges_only_when_results_exist() -> None:
+    """Branch results lead to synthesize; an empty list (single-agent turn) ends the run."""
+    from langgraph.graph import END
+
+    from hm_agent.core.state import AgentResult
+
+    result = AgentResult(agent="fashion", query="q", status="complete", text="t")
+    assert supervisor.route_after_agent({"results": [result]}) == "synthesize"
+    assert supervisor.route_after_agent({"results": []}) == END
+
+
+def test_turn_emits_one_agent_selected_per_task_and_one_merged_reply() -> None:
+    """A split turn gives one agent_selected per agent, no branch replies, and one merged reply."""
 
     class Graph:
         def stream(self, *_args, **_kwargs):
             yield "updates", {"supervisor": {"tasks": [AgentTask(agent="fashion", query="a"), AgentTask(agent="order_management", query="b")]}}
-            yield "updates", {"fashion": {"messages": [AIMessage("f", name="fashion")]}}
-            yield "updates", {"order_management": {"messages": [AIMessage("o", name="order_management")]}}
+            yield "updates", {"fashion": {"results": ["r1"]}}
+            yield "updates", {"order_management": {"results": ["r2"]}}
+            yield "custom", {"type": "token", "agent": "multi_agent", "text": "merged"}
+            yield "updates", {"synthesize": {"messages": [AIMessage("merged", name="multi_agent")], "results": []}}
 
     events = list(turns.stream_turn(Graph(), "q", "cust001", "t1"))
     assert [(e["type"], e["agent"]) for e in events] == [
         ("agent_selected", "fashion"),
         ("agent_selected", "order_management"),
-        ("reply", "fashion"),
-        ("reply", "order_management"),
+        ("token", "multi_agent"),
+        ("reply", "multi_agent"),
     ]

@@ -18,7 +18,8 @@ RAG_MIN_SCORE = _CONFIG["rag"]["min_score"]  # minimum similarity for a chunk to
 RAG_CONDENSE_HISTORY = _CONFIG["rag"]["condense_history_messages"]  # messages used to condense the query
 SUPERVISOR_HISTORY = _CONFIG["supervisor"]["history_messages"]  # messages the supervisor sees when routing
 SUPERVISOR_MAX_AGENTS = _CONFIG["supervisor"]["max_agents"]  # agents a multi-intent message may fan out to
-SUPERVISOR_STICKY_MAX_WORDS = _CONFIG["supervisor"]["sticky_max_words"]  # longest follow-up kept with the last agent without an LLM call
+SUPERVISOR_SYNTHESIS_MODEL = _CONFIG["supervisor"]["synthesis_model"]  # llm size that merges answers of a split message
+SUPERVISOR_STICKY_MAX_WORDS =_CONFIG["supervisor"]["sticky_max_words"]  # longest follow-up kept with the last agent without an LLM call
 FASHION_COLLECTION = _CONFIG["fashion"]["collection"]  # Qdrant collection holding the product catalog vectors
 FASHION_EMBEDDING = _CONFIG["fashion"]["embedding"]  # fastembed model of the product catalog collection
 FASHION_TOP_K = _CONFIG["fashion"]["top_k"]  # products fetched per search
@@ -177,6 +178,7 @@ __all__ = [
     "RAG_CONDENSE_HISTORY",
     "SUPERVISOR_HISTORY",
     "SUPERVISOR_MAX_AGENTS",
+    "SUPERVISOR_SYNTHESIS_MODEL",
     "SUPERVISOR_STICKY_MAX_WORDS",
     "FASHION_COLLECTION",
     "FASHION_EMBEDDING",

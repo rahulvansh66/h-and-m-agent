@@ -7,7 +7,9 @@ The call is streamed: progress lines and answer pieces are forwarded to the grap
 as they arrive (so a caller using ``graph.stream`` can show them live) and the full reply is still
 returned as one message. For agents that also support push notifications the webhook is registered
 as a fallback: if the stream breaks before the task ends, the node returns an acknowledgement and the
-real answer is added to the thread later by the push receiver.
+real answer is added to the thread later by the push receiver. When the supervisor split the message
+between several agents, the node instead returns its answer as an ``AgentResult`` (and streams no answer
+pieces) so the ``synthesize`` node can merge them into one reply.
 """
 
 import logging
@@ -22,7 +24,7 @@ from hm_agent.a2a.client import stream_remote_agent
 from hm_agent.a2a.push_receiver import COMPLETED_STATE, PendingTask, get_receiver
 from hm_agent.auth import USER_TOKEN_CONFIG_KEY
 from hm_agent.core.settings import A2A_HISTORY, A2A_TIMEOUT_S, agent_url
-from hm_agent.core.state import AgentState
+from hm_agent.core.state import AgentResult, AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -50,20 +52,22 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         is handed to the push receiver and an acknowledgement is returned.
 
         Reads: ``messages`` and, on a split turn, ``query`` (this agent's sub-question, sent instead
-        of the customer's message). Writes: ``messages`` (one AI reply).
+        of the customer's message). Writes: ``messages`` (one AI reply), or on a split turn ``results``
+        (one ``AgentResult``, no token events) for ``synthesize`` to merge.
 
         Args:
             state (AgentState): Current supervisor state, or the payload ``route_to_agent`` sent.
             config (RunnableConfig): Run config carrying ``customer_id``, ``thread_id`` and, when auth is on, the user token.
 
         Returns:
-            dict: ``{"messages": [AIMessage]}`` named after the agent.
+            dict: ``{"messages": [AIMessage]}`` named after the agent, or ``{"results": [AgentResult]}`` on a split turn.
         """
         configurable = config.get("configurable", {})
         customer_id, thread_id = configurable.get("customer_id", ""), configurable.get("thread_id", "")
         user_token = configurable.get(USER_TOKEN_CONFIG_KEY, "")  # lets the agent verify the user; never logged
         messages = state["messages"]
-        latest = state.get("query") or messages[-1].text
+        sub_query = state.get("query")  # set only when the message was split between several agents
+        latest = sub_query or messages[-1].text
         # Prior turns only; the latest message travels separately as the text part.
         history = [
             {"role": "user" if isinstance(m, HumanMessage) else "assistant", "text": m.text, "name": m.name}
@@ -93,7 +97,8 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
                     writer({"type": "progress", "agent": agent, "text": event.text})
                 elif event.kind == "answer":
                     pieces.append(event.text)
-                    writer({"type": "token", "agent": agent, "text": event.text})
+                    if not sub_query:  # a split turn streams only the merged answer
+                        writer({"type": "token", "agent": agent, "text": event.text})
                 else:
                     terminal = event.state
             if terminal != COMPLETED_STATE:
@@ -112,6 +117,9 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
             # The result came through the stream; ignore the webhook notifications that follow.
             receiver.mark_streamed(task_id)
         logger.info("node=%s status=%s thread_id=%s duration_s=%.2f", agent, status, thread_id, time.perf_counter() - start)
+        if sub_query:
+            # Split turn: hand the answer to ``synthesize`` instead of adding it to the conversation.
+            return {"results": [AgentResult(agent=agent, query=sub_query, status=status, text=reply)]}
         return {"messages": [AIMessage(reply, name=agent)]}
 
     return node

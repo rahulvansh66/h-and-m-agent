@@ -20,7 +20,8 @@ rag:
 supervisor:
   history_messages: 6             # most recent messages the supervisor sees when routing
   max_agents: 2                   # agents one message may fan out to (multi-intent messages)
-  sticky_max_words: 6             # short follow-ups up to this many words skip the routing LLM call; 0 turns it off
+  synthesis_model: small          # llm size (see llm:) that merges the answers when two agents replied
+  sticky_max_words: 6            # short follow-ups up to this many words skip the routing LLM call; 0 turns it off
 
 # Fashion agent: product search over a Qdrant collection built from product_catalog.
 fashion:

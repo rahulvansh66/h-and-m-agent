@@ -14,7 +14,7 @@ START -> supervisor -> order_management  -> END   (own orders and purchases, via
 
 | Component | What it does |
 |---|---|
-| `supervisor` | Classifies the latest message (with a short history window) and picks the agent. A message that mixes topics (e.g. order status plus outfit advice) fans out to up to two agents in parallel, each with its own sub-question; short follow-ups ("how long does it take?") stay with the previous agent without an LLM call (`supervisor.max_agents`, `supervisor.sticky_max_words`). |
+| `supervisor` | Classifies the latest message (with a short history window) and picks the agent. A message that mixes topics (e.g. order status plus outfit advice) fans out to up to two agents in parallel, each with its own sub-question, and a `synthesize` node merges their answers into one reply (a model call only when two agents answered; a failed or pending part is reported plainly); short follow-ups ("how long does it take?") stay with the previous agent without an LLM call (`supervisor.max_agents`, `supervisor.synthesis_model`, `supervisor.sticky_max_words`). |
 | `order_management` | ReAct agent over read-only tools served by an MCP server on the Neon `order_management` schema. The `customer_id` is injected from the run config, so the model never chooses whose data is read. |
 | `customer_support` | Condense query -> retrieve from Qdrant -> answer with citations (retries once if no citation). |
 | `shipment_tracking` | Finds the order id (`ORD-1007`) in the conversation and runs a deliberately slow dummy carrier lookup. It streams progress lines, and its Agent Card advertises push notifications. It makes no LLM calls. |
@@ -168,7 +168,7 @@ src/hm_agent/
   runtime/          AgentCore entrypoint (/invocations, /ping) and thread ownership/history helpers
   auth/             Auth0 JWT verification and a standalone login app
   core/             Shared config, settings, LLM factory, logging, db and graph state
-  supervisor/       Plans each request: one or more specialist agents, with sub-queries and sticky follow-ups
+  supervisor/       Plans each request (one or more specialist agents, sub-queries, sticky follow-ups) and merges split-turn answers
   order_management/ Agent, MCP server and client (injects customer_id), A2A service
   customer_support/ Agent, RAG pipeline (rag/), A2A service
   shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service

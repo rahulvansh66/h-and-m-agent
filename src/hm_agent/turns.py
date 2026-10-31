@@ -8,9 +8,11 @@ through the compiled supervisor graph the same way. This module builds the per-t
     {"type": "started",  "agent": ..., "task_id": ...}   the agent accepted the task
     {"type": "progress", "agent": ..., "text": ...}      a status line while the agent works
     {"type": "token",    "agent": ..., "text": ...}      a piece of the reply, as it is produced
-    {"type": "reply",    "agent": ..., "text": ...}      the full reply of one agent; a message split
-                                                         between agents gets one per agent (and one
-                                                         ``agent_selected`` per agent)
+    {"type": "reply",    "agent": ..., "text": ...}      the full reply (always the last event)
+
+A message split between several agents gets one ``agent_selected`` per agent and ``started`` /
+``progress`` events labelled by agent, but no per-agent tokens or replies: the agents' answers are
+merged, and the merged answer arrives as ``token`` and ``reply`` events with agent ``multi_agent``.
 """
 
 import logging
@@ -88,4 +90,6 @@ def stream_turn(
                 for task in update["tasks"]:
                     yield {"type": "agent_selected", "agent": task.agent}
             elif update and update.get("messages"):
-                yield {"type": "reply", "agent": node, "text": update["messages"][-1].text}
+                # Branch nodes of a split turn write ``results`` (no reply); ``synthesize`` writes the merged one.
+                message = update["messages"][-1]
+                yield {"type": "reply", "agent": message.name or node, "text": message.text}

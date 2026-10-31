@@ -133,6 +133,35 @@ def test_sub_query_replaces_latest_message(monkeypatch: pytest.MonkeyPatch) -> N
     assert sent[1][0] == "Where is ORD-1007, and what goes with my jacket?"
 
 
+def test_split_turn_returns_a_result_and_streams_no_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a split turn the answer goes to ``results`` with its status, and only progress is streamed."""
+    written: list[dict] = []
+    scripts = {
+        "ok": [RemoteEvent("started", task_id="t", push_registered=False), RemoteEvent("progress", text="Working"), RemoteEvent("answer", text="Done."), RemoteEvent("state", state=COMPLETED_STATE)],
+        "down": [ConnectionError("dropped")],
+    }
+    monkeypatch.setattr(remote_node, "get_receiver", lambda: None)
+    monkeypatch.setattr(remote_node, "get_stream_writer", lambda: written.append)
+    config = {"configurable": {"customer_id": "cust001", "thread_id": "t1"}}
+    state = {"messages": [HumanMessage("two things")], "query": "Where is ORD-1007?"}
+    results = {}
+    for name, script in scripts.items():
+
+        def fake_stream(*args, _script=script, **kwargs):
+            for item in _script:
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+
+        monkeypatch.setattr(remote_node, "stream_remote_agent", fake_stream)
+        out = remote_node.make_remote_agent_node(AGENT)(state, config)
+        assert "messages" not in out
+        results[name] = out["results"][0]
+    assert (results["ok"].status, results["ok"].text, results["ok"].query) == ("complete", "Done.", "Where is ORD-1007?")
+    assert (results["down"].status, results["down"].text) == ("failed", remote_node.UNAVAILABLE_REPLY)
+    assert [w["type"] for w in written] == ["started", "progress"]
+
+
 def test_user_token_from_run_config_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The token in the run config reaches the client call; without one an empty token is passed."""
     from hm_agent.auth import USER_TOKEN_CONFIG_KEY
