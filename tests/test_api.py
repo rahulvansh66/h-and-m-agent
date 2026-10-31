@@ -17,6 +17,7 @@ from hm_agent.api import deps
 from hm_agent.api.app import create_app
 from hm_agent.api.routes import health
 from hm_agent.api.service import PushEventHub, RateLimiter, Services
+from hm_agent.core.state import AgentTask
 
 KEY = "test-key"
 HEADERS = {"X-API-Key": KEY, "X-Customer-Id": "cust001"}
@@ -49,7 +50,7 @@ class FakeGraph:
         if text == "explode":
             raise RuntimeError("graph failure")
         thread_id = config["configurable"]["thread_id"]
-        yield "updates", {"supervisor": {"next_agent": "order_management"}}
+        yield "updates", {"supervisor": {"tasks": [AgentTask(agent="order_management")]}}
         yield "custom", {"type": "started", "agent": "order_management", "task_id": "x"}
         yield "custom", {"type": "token", "agent": "order_management", "text": "You bought "}
         yield "custom", {"type": "token", "agent": "order_management", "text": "a dress."}

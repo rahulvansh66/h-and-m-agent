@@ -55,7 +55,9 @@ def _run_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_id
     """Send one user message to the graph and print the answer as it streams in.
 
     Progress lines from the agent are printed as they arrive. If the agent streams its reply, the
-    pieces are printed as they come; otherwise the full reply is printed once the turn ends.
+    pieces are printed as they come; otherwise the full reply is printed once the turn ends. When a
+    message is split between several agents their pieces would interleave, so each agent's full
+    reply is printed under its own label instead of streaming it.
 
     Args:
         graph (CompiledStateGraph): Compiled supervisor graph with a checkpointer attached.
@@ -64,15 +66,21 @@ def _run_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_id
         thread_id (str): Conversation thread id; earlier turns are loaded from the checkpointer.
     """
     streamed = False  # True once reply pieces were printed, so the final reply is not printed again
+    agents = 0  # how many agents the supervisor picked for this turn
     with _THREAD_LOCK:
         for event in stream_turn(graph, query, customer_id, thread_id):
-            if event["type"] == "progress":
-                print(f"  ... {event['text']}", flush=True)
-            elif event["type"] == "token":
+            if event["type"] == "agent_selected":
+                agents += 1
+            elif event["type"] == "progress":
+                print(f"  ... [{event['agent']}] {event['text']}" if agents > 1 else f"  ... {event['text']}", flush=True)
+            elif event["type"] == "token" and agents <= 1:
                 print(event["text"] if streamed else f"\nassistant> {event['text']}", end="", flush=True)
                 streamed = True
             elif event["type"] == "reply":
-                print("" if streamed else f"\nassistant> {event['text']}", flush=True)
+                if agents > 1:
+                    print(f"\nassistant ({event['agent']})> {event['text']}", flush=True)
+                else:
+                    print("" if streamed else f"\nassistant> {event['text']}", flush=True)
 
 
 def _make_deliver(graph: CompiledStateGraph, interactive: bool) -> Callable[[PendingTask, str], None]:

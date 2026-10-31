@@ -9,11 +9,9 @@ llm:
   small: openai/gpt-oss-20b
   big: openai/gpt-oss-120b
 
-# Local embedding model (fastembed). Must match the model used to ingest the Qdrant collection.
-embedding: BAAI/bge-small-en-v1.5
-
 rag:
   collection: troubleshooting_kb  # Qdrant collection holding the support knowledge base
+  embedding: BAAI/bge-small-en-v1.5   # local fastembed model; must match the one used to ingest the collection
   top_k: 2                        # documents fetched per retrieval
   max_retries: 1                  # query-rewrite retries allowed when the answer has no citation
   min_score: 0.5                  # relevance gate: chunks scoring below this are dropped before the LLM
@@ -21,10 +19,13 @@ rag:
 
 supervisor:
   history_messages: 6             # most recent messages the supervisor sees when routing
+  max_agents: 2                   # agents one message may fan out to (multi-intent messages)
+  sticky_max_words: 6             # short follow-ups up to this many words skip the routing LLM call; 0 turns it off
 
 # Fashion agent: product search over a Qdrant collection built from product_catalog.
 fashion:
   collection: product_catalog     # Qdrant collection (built by scripts/fashion/ingest_catalog.py)
+  embedding: BAAI/bge-small-en-v1.5   # fastembed model; must match the one used by scripts/fashion/ingest_catalog.py
   top_k: 5                        # products fetched per search
   min_score: 0.5                  # relevance gate: products scoring below this are dropped
   mcp_host: 127.0.0.1             # long-lived MCP server, so the embedding model loads once

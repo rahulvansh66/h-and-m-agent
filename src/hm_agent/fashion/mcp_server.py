@@ -20,13 +20,14 @@ from hm_agent.core.db import fetch_all, fetch_one
 from hm_agent.core.logging_setup import configure_logging
 from hm_agent.core.settings import (
     FASHION_COLLECTION,
+    FASHION_EMBEDDING,
     FASHION_MCP_HOST,
     FASHION_MCP_PORT,
     FASHION_MIN_SCORE,
     FASHION_TOP_K,
     REPO_ROOT,
 )
-from hm_agent.customer_support.rag.retriever import get_client, get_embedder
+from hm_agent.core.vector_store import get_client, get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ def search_products(
     if exclude_product_ids:
         must_not.append(models.FieldCondition(key="product_id", match=models.MatchAny(any=exclude_product_ids)))
 
-    vector = next(iter(get_embedder().query_embed(query))).tolist()
+    vector = next(iter(get_embedder(FASHION_EMBEDDING).query_embed(query))).tolist()
     hits = get_client().query_points(
         collection_name=FASHION_COLLECTION,
         query=vector,
@@ -242,7 +243,7 @@ def main() -> None:
     """Start the server on the streamable HTTP transport and warm the embedding model first."""
     load_dotenv(REPO_ROOT / ".env")
     configure_logging("mcp-fashion")
-    get_embedder()  # load once at startup so the first search is not slow
+    get_embedder(FASHION_EMBEDDING)  # load once at startup so the first search is not slow
     mcp.run(transport="streamable-http")
 
 

@@ -41,7 +41,7 @@ def fake_search(monkeypatch):
 
     def install(points: list) -> FakeQdrant:
         qdrant = FakeQdrant(points)
-        monkeypatch.setattr(mcp_server, "get_embedder", lambda: FakeEmbedder())
+        monkeypatch.setattr(mcp_server, "get_embedder", lambda model_name: FakeEmbedder())
         monkeypatch.setattr(mcp_server, "get_client", lambda: qdrant)
         monkeypatch.setattr(
             mcp_server,

@@ -53,7 +53,7 @@ RUN sed -i 's/\r$//' /usr/local/bin/start-agent && chmod +x /usr/local/bin/start
     && mkdir -p /opt/fastembed && chown app /opt/fastembed
 USER app
 RUN if [ "$PRELOAD_EMBEDDING" = "true" ]; then \
-      python -c "from hm_agent.core.config import load_config; from fastembed import TextEmbedding; TextEmbedding(load_config()['embedding'])"; \
+      python -c "import os; from hm_agent.core.config import load_config; from fastembed import TextEmbedding; TextEmbedding(load_config()[{'customer_support': 'rag', 'fashion': 'fashion'}[os.environ['AGENT']]]['embedding'])"; \
     fi
 
 EXPOSE 9000

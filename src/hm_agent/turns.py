@@ -8,7 +8,9 @@ through the compiled supervisor graph the same way. This module builds the per-t
     {"type": "started",  "agent": ..., "task_id": ...}   the agent accepted the task
     {"type": "progress", "agent": ..., "text": ...}      a status line while the agent works
     {"type": "token",    "agent": ..., "text": ...}      a piece of the reply, as it is produced
-    {"type": "reply",    "agent": ..., "text": ...}      the full reply (always the last event)
+    {"type": "reply",    "agent": ..., "text": ...}      the full reply of one agent; a message split
+                                                         between agents gets one per agent (and one
+                                                         ``agent_selected`` per agent)
 """
 
 import logging
@@ -83,6 +85,7 @@ def stream_turn(
             continue
         for node, update in data.items():
             if node == "supervisor":
-                yield {"type": "agent_selected", "agent": update["next_agent"]}
+                for task in update["tasks"]:
+                    yield {"type": "agent_selected", "agent": task.agent}
             elif update and update.get("messages"):
                 yield {"type": "reply", "agent": node, "text": update["messages"][-1].text}

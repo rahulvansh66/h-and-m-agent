@@ -49,10 +49,11 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         conversation. If the stream breaks while a push-registered task is still running, the task
         is handed to the push receiver and an acknowledgement is returned.
 
-        Reads: ``messages``. Writes: ``messages`` (one AI reply).
+        Reads: ``messages`` and, on a split turn, ``query`` (this agent's sub-question, sent instead
+        of the customer's message). Writes: ``messages`` (one AI reply).
 
         Args:
-            state (AgentState): Current supervisor state.
+            state (AgentState): Current supervisor state, or the payload ``route_to_agent`` sent.
             config (RunnableConfig): Run config carrying ``customer_id``, ``thread_id`` and, when auth is on, the user token.
 
         Returns:
@@ -62,7 +63,7 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         customer_id, thread_id = configurable.get("customer_id", ""), configurable.get("thread_id", "")
         user_token = configurable.get(USER_TOKEN_CONFIG_KEY, "")  # lets the agent verify the user; never logged
         messages = state["messages"]
-        latest = messages[-1].text
+        latest = state.get("query") or messages[-1].text
         # Prior turns only; the latest message travels separately as the text part.
         history = [
             {"role": "user" if isinstance(m, HumanMessage) else "assistant", "text": m.text, "name": m.name}

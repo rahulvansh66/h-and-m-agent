@@ -5,40 +5,11 @@ The only module that talks to Qdrant.
 """
 
 import logging
-import os
-from functools import cache
 
-from fastembed import TextEmbedding
-from qdrant_client import QdrantClient
-
-from hm_agent.core.config import load_config
-from hm_agent.core.settings import RAG_COLLECTION, RAG_TOP_K
+from hm_agent.core.settings import RAG_COLLECTION, RAG_EMBEDDING, RAG_TOP_K
+from hm_agent.core.vector_store import get_client, get_embedder
 
 logger = logging.getLogger(__name__)
-
-
-@cache
-def get_client() -> QdrantClient:
-    """Build and cache the Qdrant client from ``QDRANT_ENDPOINT`` / ``QDRANT_API_KEY``.
-
-    Shared with the fashion agent's product search.
-
-    Returns:
-        QdrantClient: Client connected to the configured Qdrant cluster.
-    """
-    return QdrantClient(url=os.environ["QDRANT_ENDPOINT"], api_key=os.environ["QDRANT_API_KEY"])
-
-
-@cache
-def get_embedder() -> TextEmbedding:
-    """Load and cache the embedding model named under ``embedding`` in the layered config.
-
-    Shared with the fashion agent, so documents and queries use the same model.
-
-    Returns:
-        TextEmbedding: Local fastembed model (downloaded on first use).
-    """
-    return TextEmbedding(load_config()["embedding"])
 
 
 def retrieve(query: str, top_k: int = RAG_TOP_K) -> list[dict]:
@@ -52,7 +23,7 @@ def retrieve(query: str, top_k: int = RAG_TOP_K) -> list[dict]:
         list[dict]: Chunks ordered by similarity, each with ``text``, ``doc_title``,
         ``source_file``, ``page`` and ``score``. Empty if nothing matched.
     """
-    vector = next(iter(get_embedder().query_embed(query))).tolist()
+    vector = next(iter(get_embedder(RAG_EMBEDDING).query_embed(query))).tolist()
     hits = get_client().query_points(
         collection_name=RAG_COLLECTION, query=vector, limit=top_k, with_payload=True
     ).points

@@ -11,12 +11,16 @@ _CONFIG = load_config()
 
 DEFAULT_CUSTOMER_ID = _CONFIG["defaults"]["customer_id"]
 RAG_COLLECTION = _CONFIG["rag"]["collection"]  # Qdrant collection holding the support knowledge base
+RAG_EMBEDDING = _CONFIG["rag"]["embedding"]  # fastembed model of the knowledge-base collection
 RAG_TOP_K = _CONFIG["rag"]["top_k"]  # documents fetched per retrieval
 RAG_MAX_RETRIES = _CONFIG["rag"]["max_retries"]  # query-rewrite retries when the answer has no citation
 RAG_MIN_SCORE = _CONFIG["rag"]["min_score"]  # minimum similarity for a chunk to reach the LLM
 RAG_CONDENSE_HISTORY = _CONFIG["rag"]["condense_history_messages"]  # messages used to condense the query
 SUPERVISOR_HISTORY = _CONFIG["supervisor"]["history_messages"]  # messages the supervisor sees when routing
+SUPERVISOR_MAX_AGENTS = _CONFIG["supervisor"]["max_agents"]  # agents a multi-intent message may fan out to
+SUPERVISOR_STICKY_MAX_WORDS = _CONFIG["supervisor"]["sticky_max_words"]  # longest follow-up kept with the last agent without an LLM call
 FASHION_COLLECTION = _CONFIG["fashion"]["collection"]  # Qdrant collection holding the product catalog vectors
+FASHION_EMBEDDING = _CONFIG["fashion"]["embedding"]  # fastembed model of the product catalog collection
 FASHION_TOP_K = _CONFIG["fashion"]["top_k"]  # products fetched per search
 FASHION_MIN_SCORE = _CONFIG["fashion"]["min_score"]  # minimum similarity for a product to be returned
 FASHION_MCP_HOST = _CONFIG["fashion"]["mcp_host"]  # interface of the long-lived fashion MCP server
@@ -172,12 +176,16 @@ __all__ = [
     "REPO_ROOT",
     "DEFAULT_CUSTOMER_ID",
     "RAG_COLLECTION",
+    "RAG_EMBEDDING",
     "RAG_TOP_K",
     "RAG_MAX_RETRIES",
     "RAG_MIN_SCORE",
     "RAG_CONDENSE_HISTORY",
     "SUPERVISOR_HISTORY",
+    "SUPERVISOR_MAX_AGENTS",
+    "SUPERVISOR_STICKY_MAX_WORDS",
     "FASHION_COLLECTION",
+    "FASHION_EMBEDDING",
     "FASHION_TOP_K",
     "FASHION_MIN_SCORE",
     "FASHION_MCP_HOST",

@@ -14,7 +14,7 @@ START -> supervisor -> order_management  -> END   (own orders and purchases, via
 
 | Component | What it does |
 |---|---|
-| `supervisor` | Classifies the latest message (with a short history window) and picks the agent. |
+| `supervisor` | Classifies the latest message (with a short history window) and picks the agent. A message that mixes topics (e.g. order status plus outfit advice) fans out to up to two agents in parallel, each with its own sub-question; short follow-ups ("how long does it take?") stay with the previous agent without an LLM call (`supervisor.max_agents`, `supervisor.sticky_max_words`). |
 | `order_management` | ReAct agent over read-only tools served by an MCP server on the Neon `order_management` schema. The `customer_id` is injected from the run config, so the model never chooses whose data is read. |
 | `customer_support` | Condense query -> retrieve from Qdrant -> answer with citations (retries once if no citation). |
 | `shipment_tracking` | Finds the order id (`ORD-1007`) in the conversation and runs a deliberately slow dummy carrier lookup. It streams progress lines, and its Agent Card advertises push notifications. It makes no LLM calls. |
@@ -169,7 +169,7 @@ src/hm_agent/
   turns.py          One-message turn logic shared by the CLI and the API
   api/              FastAPI app, routes, auth, rate limit, thread locks and SSE
   core/             Shared config, settings, LLM factory, logging, db and graph state
-  supervisor/       Routes each request to a specialist agent
+  supervisor/       Plans each request: one or more specialist agents, with sub-queries and sticky follow-ups
   order_management/ Agent, MCP server and client (injects customer_id), A2A service
   customer_support/ Agent, RAG pipeline (rag/), A2A service
   shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service

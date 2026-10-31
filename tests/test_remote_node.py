@@ -113,6 +113,26 @@ def test_failed_task_returns_apology_and_ignores_webhook(setup) -> None:
     assert receiver.streamed == ["task-4"] and receiver.registered == []
 
 
+def test_sub_query_replaces_latest_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a split turn the agent receives its own sub-query, with the earlier turns as history."""
+    sent: list[tuple] = []
+
+    def fake_stream(url, text, history, *args, **kwargs):
+        sent.append((text, history))
+        yield RemoteEvent("state", state=COMPLETED_STATE)
+
+    monkeypatch.setattr(remote_node, "get_receiver", lambda: None)
+    monkeypatch.setattr(remote_node, "get_stream_writer", lambda: lambda event: None)
+    monkeypatch.setattr(remote_node, "stream_remote_agent", fake_stream)
+    node = remote_node.make_remote_agent_node(AGENT)
+    config = {"configurable": {"customer_id": "cust001", "thread_id": "t1"}}
+    messages = [HumanMessage("hi"), HumanMessage("Where is ORD-1007, and what goes with my jacket?")]
+    node({"messages": messages, "query": "Where is ORD-1007?"}, config)
+    node({"messages": messages, "query": None}, config)
+    assert sent[0][0] == "Where is ORD-1007?" and [h["text"] for h in sent[0][1]] == ["hi"]
+    assert sent[1][0] == "Where is ORD-1007, and what goes with my jacket?"
+
+
 def test_user_token_from_run_config_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The token in the run config reaches the client call; without one an empty token is passed."""
     from hm_agent.auth import USER_TOKEN_CONFIG_KEY

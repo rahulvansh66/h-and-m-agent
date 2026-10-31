@@ -16,8 +16,8 @@ from qdrant_client import models
 
 from hm_agent.core.db import fetch_all
 from hm_agent.core.logging_setup import configure_logging
-from hm_agent.core.settings import FASHION_COLLECTION, REPO_ROOT
-from hm_agent.customer_support.rag.retriever import get_client, get_embedder
+from hm_agent.core.settings import FASHION_COLLECTION, FASHION_EMBEDDING, REPO_ROOT
+from hm_agent.core.vector_store import get_client, get_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def main() -> None:
         (),
     )
     texts = [build_text(r[1], r[2], r[4], r[5], r[7]) for r in rows]
-    vectors = [v.tolist() for v in get_embedder().embed(texts)]
+    vectors = [v.tolist() for v in get_embedder(FASHION_EMBEDDING).embed(texts)]
 
     client = get_client()
     if client.collection_exists(FASHION_COLLECTION):
