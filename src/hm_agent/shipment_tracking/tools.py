@@ -50,6 +50,7 @@ def order_belongs_to_customer(order_id: str, customer_id: str) -> bool:
     """
     if not customer_id:
         return False
+    # Filtering on both ids means another customer's order looks exactly like a missing one.
     row = fetch_one(
         "SELECT 1 FROM order_management.orders WHERE order_id = %s AND customer_id = %s",
         (order_id.upper(), customer_id),
@@ -66,7 +67,9 @@ def _build_status(order_id: str) -> str:
     Returns:
         str: Human-readable status with carrier, tracking number, last scan and delivery outlook.
     """
+    # Hash instead of random so the demo is repeatable: the same order id always gets the same carrier and tracking number.
     digest = hashlib.sha256(order_id.upper().encode()).hexdigest()
+    # First 8 hex chars pick the scenario; the next 10 form a 10-digit tracking number.
     carrier, location, outlook = _SCENARIOS[int(digest[:8], 16) % len(_SCENARIOS)]
     tracking = f"{carrier.split()[0].upper()}{int(digest[8:18], 16) % 10**10:010d}"
     logger.info("tool=check_carrier_status status=complete order_id=%s carrier=%s", order_id, carrier)

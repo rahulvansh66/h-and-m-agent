@@ -11,11 +11,16 @@ through the compiled supervisor graph the same way. This module builds the per-t
     {"type": "reply",    "agent": ..., "text": ...}      the full reply (always the last event)
 
 A message split between several agents gets one ``agent_selected`` per agent and ``started`` /
-``progress`` events labelled by agent, but no per-agent tokens or replies: the agents' answers are
-merged, and the merged answer arrives as ``token`` and ``reply`` events with agent ``multi_agent``.
+``progress`` events labelled by agent. Their answers stream as ``token`` events with agent
+``multi_agent``, one section at a time (each behind a short lead-in), starting as soon as the first
+agent answers; the last event is one ``reply`` with the whole combined text.
+
+Each turn also logs one ``turn status=done ... ttft_s=... total_s=...`` line (time to the first token
+and total time) for log-based latency metrics.
 """
 
 import logging
+import time
 from collections.abc import Iterator
 
 from langchain_core.messages import HumanMessage
@@ -76,6 +81,11 @@ def stream_turn(
         dict: Event dicts as described in the module docstring. The last one has ``type == "reply"``
         (it is missing only when the graph produced no AI message).
     """
+    start = time.perf_counter()
+    first_token_s: float | None = None  # time to first token (ttft), set once on the first "token" event
+    agents = 0  # number of agents the supervisor picked; more than one means a split turn
+    # Two stream modes at once: "updates" gives per-node state changes (routing, final replies), "custom"
+    # gives the events the nodes write themselves (started / progress / token).
     stream = graph.stream(
         {"messages": [HumanMessage(query)]},
         build_config(customer_id, thread_id, user_token),
@@ -83,13 +93,26 @@ def stream_turn(
     )
     for mode, data in stream:
         if mode == "custom":
+            if data.get("type") == "token" and first_token_s is None:
+                first_token_s = time.perf_counter() - start
             yield data  # written by the remote-agent node: started / progress / token
             continue
+        # "updates" payload: {node_name: state_update}.
         for node, update in data.items():
             if node == "supervisor":
                 for task in update["tasks"]:
+                    agents += 1
                     yield {"type": "agent_selected", "agent": task.agent}
             elif update and update.get("messages"):
-                # Branch nodes of a split turn write ``results`` (no reply); ``synthesize`` writes the merged one.
+                # Branch nodes of a split turn write ``results`` (no reply); ``synthesize`` writes the combined one.
                 message = update["messages"][-1]
                 yield {"type": "reply", "agent": message.name or node, "text": message.text}
+    # One line per turn, shaped for log-based metrics: alert on a high p95 of ttft_s, split-turn share, etc.
+    logger.info(
+        "turn status=done thread_id=%s split=%s agents=%d ttft_s=%s total_s=%.2f",
+        thread_id,
+        agents > 1,
+        agents,
+        f"{first_token_s:.2f}" if first_token_s is not None else "none",
+        time.perf_counter() - start,
+    )

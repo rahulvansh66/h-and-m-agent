@@ -93,6 +93,7 @@ class _SseLoggingStream(httpx.AsyncByteStream):
             bytes: The unmodified body chunks.
         """
         async for chunk in self._inner:
+            # A network chunk can end mid-line: keep the unfinished tail in ``_pending`` and log only whole lines.
             self._pending += chunk.decode("utf-8", "replace")
             *lines, self._pending = self._pending.split("\n")
             for line in lines:

@@ -6,14 +6,15 @@
                         -> fashion           (A2A) -> END
                         -> out_of_scope      (local) -> END
 
-    A message that mixes topics goes to two agents in parallel; their answers then meet in
-    ``synthesize``:  supervisor -> (agent A, agent B) -> synthesize -> END
+    A message that mixes topics goes to two agents in parallel; their answers stream as sections
+    (see ``supervisor.split_stream``) and meet in ``synthesize``:
+    supervisor -> (agent A, agent B) -> synthesize -> END
 
 Role in the system: wires the supervisor and the agents into one compiled graph. The real
 agents run as their own A2A services (``hm_agent.<agent>.a2a_service``); here each is only a node that
 calls it (``shipment_tracking`` returns an acknowledgement and its result is added to the thread
 later, by the push receiver). ``out_of_scope`` is a local node returning the supervisor's fixed decline reply.
-``synthesize`` runs only after a split turn and merges the branch answers into one reply.
+``synthesize`` runs only after a split turn: it streams the notes for failed parts and saves the one combined reply.
 """
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -44,14 +45,19 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> CompiledStat
     """
     graph = StateGraph(AgentState)
     graph.add_node("supervisor", supervisor_node)
+    # Local nodes (no A2A call): the decline reply and the split-turn closer.
     graph.add_node(OUT_OF_SCOPE, out_of_scope_node)
     graph.add_edge(OUT_OF_SCOPE, END)
     graph.add_node("synthesize", synthesize_node)
     graph.add_edge("synthesize", END)
+    # One node per remote agent, all built by the same factory (only the agent name differs).
     for agent in REMOTE_AGENTS:
-        graph.add_node(agent, make_remote_agent_node(agent))
-        # A single-agent turn ends here; a split turn goes on to merge the branch answers.
+        # input_schema pins the node to the shared state; otherwise LangGraph would turn the BranchInput hint
+        # into extra state channels (``query``) that nothing writes. The Send payload still arrives as sent.
+        graph.add_node(agent, make_remote_agent_node(agent), input_schema=AgentState)
+        # A single-agent turn ends here; a split turn goes on to close the turn in synthesize.
         graph.add_conditional_edges(agent, route_after_agent, {"synthesize": "synthesize", END: END})
     graph.add_edge(START, "supervisor")
+    # route_to_agent returns Send objects, so one or several agents run in parallel with no fixed target map.
     graph.add_conditional_edges("supervisor", route_to_agent)
     return graph.compile(checkpointer=checkpointer)

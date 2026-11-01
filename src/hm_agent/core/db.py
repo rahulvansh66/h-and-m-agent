@@ -25,6 +25,7 @@ def fetch_one(sql: str, params: tuple[str, ...]) -> tuple | None:
     Returns:
         tuple | None: The first row, or None if the query returned no rows.
     """
+    # One short-lived connection per query (Neon is serverless); read_only makes writes fail at the DB level.
     with psycopg.connect(os.environ["NEON_POSTGRES_CONNECTION_STRING"]) as conn:
         conn.read_only = True
         return conn.execute(sql, params).fetchone()
@@ -56,6 +57,7 @@ def neon_checkpointer() -> Generator[PostgresSaver]:
         PostgresSaver: Checkpointer ready to pass to ``StateGraph.compile``.
     """
     dsn = os.environ["NEON_POSTGRES_CONNECTION_STRING"]
+    # The schema name comes from our own settings (never user input), so the f-string is safe here.
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {CHECKPOINT_SCHEMA}")
 
@@ -90,7 +92,7 @@ def neon_checkpointer_pool(max_size: int) -> Generator[PostgresSaver]:
 
     with ConnectionPool(
         dsn,
-        min_size=1,
+        min_size=1,  # keep one warm connection; the pool grows on demand up to max_size
         max_size=max_size,
         kwargs={"autocommit": True, "row_factory": dict_row, "options": f"-c search_path={CHECKPOINT_SCHEMA}"},
         open=True,

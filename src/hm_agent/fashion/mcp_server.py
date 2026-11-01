@@ -75,6 +75,7 @@ def _resolve_segment(customer_id: str) -> str | None:
         """,
         (customer_id, list(SEGMENT_GROUPS)),
     )
+    # Map catalog index groups to segment names, then compare the two counts.
     counts = {SEGMENT_GROUPS[group]: n for group, n in rows}
     women, men = counts.get("women", 0), counts.get("men", 0)
     if women == men:
@@ -195,6 +196,7 @@ def search_products(
     Returns:
         str: One line per matching product, best first, or a message saying there is no good match.
     """
+    # Step 1: build "must not match" filters, applied inside the vector search so excluded items never rank.
     excluded_groups = list(exclude_product_groups or [])
     if not allow_swimwear_underwear:
         excluded_groups += [g for g in NON_OUTFIT_GROUPS if g not in excluded_groups]
@@ -204,6 +206,7 @@ def search_products(
     if exclude_product_ids:
         must_not.append(models.FieldCondition(key="product_id", match=models.MatchAny(any=exclude_product_ids)))
 
+    # Step 2: embed the query (query_embed yields one vector per input) and run the filtered similarity search.
     vector = next(iter(get_embedder(FASHION_EMBEDDING).query_embed(query))).tolist()
     hits = get_client().query_points(
         collection_name=FASHION_COLLECTION,
@@ -217,6 +220,7 @@ def search_products(
         logger.warning("tool=search_products status=no_match collection=%s", FASHION_COLLECTION)
         return "No good match found in the catalog."
 
+    # Step 3: the vector store only ranks; names, colours and descriptions come from Postgres (single source of truth).
     ids = [h.payload["product_id"] for h in hits]
     rows = fetch_all(
         """
@@ -226,7 +230,7 @@ def search_products(
         """,
         (ids,),
     )
-    by_id = {row[0]: row for row in rows}
+    by_id = {row[0]: row for row in rows}  # the SQL IN-list loses the ranking, so re-apply it via ``hits`` below
     logger.info("tool=search_products matches=%d top_score=%.3f", len(hits), hits[0].score)
     lines = []
     for hit in hits:

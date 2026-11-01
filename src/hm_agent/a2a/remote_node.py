@@ -8,8 +8,8 @@ as they arrive (so a caller using ``graph.stream`` can show them live) and the f
 returned as one message. For agents that also support push notifications the webhook is registered
 as a fallback: if the stream breaks before the task ends, the node returns an acknowledgement and the
 real answer is added to the thread later by the push receiver. When the supervisor split the message
-between several agents, the node instead returns its answer as an ``AgentResult`` (and streams no answer
-pieces) so the ``synthesize`` node can merge them into one reply.
+between several agents, the node instead returns its answer as an ``AgentResult`` for ``synthesize`` and
+hands its answer pieces to the turn's ``SplitStream``, which shows the agents' answers one after another.
 """
 
 import logging
@@ -23,8 +23,9 @@ from langgraph.config import get_stream_writer
 from hm_agent.a2a.client import stream_remote_agent
 from hm_agent.a2a.push_receiver import COMPLETED_STATE, PendingTask, get_receiver
 from hm_agent.auth import USER_TOKEN_CONFIG_KEY
-from hm_agent.core.settings import A2A_HISTORY, A2A_TIMEOUT_S, agent_url
-from hm_agent.core.state import AgentResult, AgentState
+from hm_agent.core.settings import A2A_HISTORY, A2A_TIMEOUT_S, SUPERVISOR_BRANCH_TIMEOUT_S, agent_url
+from hm_agent.core.state import AgentResult, BranchInput
+from hm_agent.supervisor.split_stream import get_split_stream
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +33,17 @@ UNAVAILABLE_REPLY = "Sorry, I can't answer that right now. Please try again in a
 PENDING_REPLY = "I'm checking with the carrier now. This can take a little while; I'll post the result here as soon as it arrives."
 
 
-def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig], dict]:
+def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig], dict]:
     """Create a graph node that calls the A2A agent ``agent`` over a streaming connection.
 
     Args:
         agent (str): Agent name; also the AI message name and the key of its URL setting.
 
     Returns:
-        Callable[[AgentState, RunnableConfig], dict]: Node reading ``messages`` and writing one AI reply.
+        Callable[[BranchInput, RunnableConfig], dict]: Node reading ``messages`` and writing one AI reply.
     """
 
-    def node(state: AgentState, config: RunnableConfig) -> dict:
+    def node(state: BranchInput, config: RunnableConfig) -> dict:
         """Call the remote agent for the latest customer message and stream its output.
 
         Custom stream events (``{"type": "started" | "progress" | "token", "agent", ...}``) are
@@ -53,10 +54,11 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
 
         Reads: ``messages`` and, on a split turn, ``query`` (this agent's sub-question, sent instead
         of the customer's message). Writes: ``messages`` (one AI reply), or on a split turn ``results``
-        (one ``AgentResult``, no token events) for ``synthesize`` to merge.
+        (one ``AgentResult``) for ``synthesize``; its answer pieces go to the turn's ``SplitStream``
+        (``turn_id``) unless ``combine`` is set. The A2A call uses ``supervisor.branch_timeout_s`` on a split turn.
 
         Args:
-            state (AgentState): Current supervisor state, or the payload ``route_to_agent`` sent.
+            state (BranchInput): The payload ``route_to_agent`` sent to this agent.
             config (RunnableConfig): Run config carrying ``customer_id``, ``thread_id`` and, when auth is on, the user token.
 
         Returns:
@@ -68,6 +70,11 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         messages = state["messages"]
         sub_query = state.get("query")  # set only when the message was split between several agents
         latest = sub_query or messages[-1].text
+        # On a split turn answer pieces go through the turn's coordinator, which shows one agent at a time;
+        # when the answer is to be composed (``combine``) the branch stays silent instead.
+        turn_id = state.get("turn_id", "")
+        split_stream = get_split_stream(turn_id) if sub_query and turn_id and not state.get("combine") else None
+        timeout = SUPERVISOR_BRANCH_TIMEOUT_S if sub_query else A2A_TIMEOUT_S
         # Prior turns only; the latest message travels separately as the text part.
         history = [
             {"role": "user" if isinstance(m, HumanMessage) else "assistant", "text": m.text, "name": m.name}
@@ -76,6 +83,8 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         writer = get_stream_writer()
         receiver = get_receiver()
         url = agent_url(agent)
+        # task_id/push_registered: filled on the "started" event. terminal: final task state, empty until the
+        # stream ends cleanly. pieces: answer fragments, joined into the reply at the end.
         task_id, push_registered, terminal, pieces = "", False, "", []
         start = time.perf_counter()
         try:
@@ -85,7 +94,7 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
                 history,
                 customer_id,
                 thread_id,
-                A2A_TIMEOUT_S,
+                timeout,
                 push=receiver.target if receiver else None,
                 user_token=user_token,
             )
@@ -97,14 +106,20 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
                     writer({"type": "progress", "agent": agent, "text": event.text})
                 elif event.kind == "answer":
                     pieces.append(event.text)
-                    if not sub_query:  # a split turn streams only the merged answer
-                        writer({"type": "token", "agent": agent, "text": event.text})
+                    if split_stream is not None:
+                        split_stream.piece(agent, event.text, writer)  # split turn: coordinator orders the output
+                    elif not sub_query:
+                        writer({"type": "token", "agent": agent, "text": event.text})  # single agent: stream directly
+                    # split turn with ``combine``: stay silent, synthesize streams the composed answer
                 else:
                     terminal = event.state
+            # A stream that ends without a terminal state, or in failed/canceled/rejected, is an error; the
+            # handler below decides between the push fallback and the apology.
             if terminal != COMPLETED_STATE:
                 raise RuntimeError(f"task {task_id} ended in state {terminal or 'unknown'}")
             reply, status = "".join(pieces), "complete"
         except Exception:
+            # Broad catch on purpose: one broken agent must degrade to a message, not crash the whole turn.
             if task_id and push_registered and not terminal and receiver is not None:
                 # Stream lost but the task may still be running: the webhook will report its result.
                 logger.warning("node=%s status=stream_lost thread_id=%s task_id=%s fallback=push", agent, thread_id, task_id)
@@ -116,7 +131,16 @@ def make_remote_agent_node(agent: str) -> Callable[[AgentState, RunnableConfig],
         if task_id and push_registered and terminal and receiver is not None:
             # The result came through the stream; ignore the webhook notifications that follow.
             receiver.mark_streamed(task_id)
-        logger.info("node=%s status=%s thread_id=%s duration_s=%.2f", agent, status, thread_id, time.perf_counter() - start)
+        logger.info(
+            "node=%s status=%s split=%s thread_id=%s duration_s=%.2f",
+            agent,
+            status,
+            bool(sub_query),
+            thread_id,
+            time.perf_counter() - start,
+        )
+        if split_stream is not None:
+            split_stream.finish(agent, status == "complete", writer)  # passes the baton on
         if sub_query:
             # Split turn: hand the answer to ``synthesize`` instead of adding it to the conversation.
             return {"results": [AgentResult(agent=agent, query=sub_query, status=status, text=reply)]}
