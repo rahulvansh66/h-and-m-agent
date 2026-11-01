@@ -56,8 +56,8 @@ def _run_turn(graph: CompiledStateGraph, query: str, customer_id: str, thread_id
 
     Progress lines from the agent are printed as they arrive. If the agent streams its reply, the
     pieces are printed as they come; otherwise the full reply is printed once the turn ends. When a
-    message is split between several agents, progress lines carry the agent name and the merged
-    answer is printed once it is ready.
+    message is split between several agents, progress lines carry the agent name and the answer
+    streams one section at a time, starting as soon as the first agent answers.
 
     Args:
         graph (CompiledStateGraph): Compiled supervisor graph with a checkpointer attached.
@@ -147,6 +147,7 @@ def main() -> None:
                     logger.warning("component=cli status=push_timeout wait_s=%d", PUSH_WAIT_S)
             else:
                 print(f"Chat started (thread_id: {thread_id}). Type 'exit' to quit.")
+                # Chat loop: Ctrl+C / Ctrl+D / an exit word end it; blank lines are ignored.
                 while True:
                     try:
                         query = input("\nyou> ").strip()

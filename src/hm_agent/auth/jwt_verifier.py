@@ -133,6 +133,8 @@ class JwtVerifier:
         Raises:
             AuthError: ``jwks_unavailable`` if keys cannot be loaded, ``unknown_key`` if none matches.
         """
+        # Two refresh triggers: the cache expired (time-based), or an unknown kid appeared (key rotation).
+        # If we just refreshed because of staleness, an unknown kid is a real failure, not a reason to refetch.
         stale = self._fetched_at is None or self._clock() - self._fetched_at > self._cache_ttl_s
         if stale:
             self._load_keys()
@@ -179,6 +181,7 @@ class JwtVerifier:
         """
         if not token:
             raise AuthError("missing_token")
+        # Read the key id from the header without trusting it yet; it only selects which public key to use.
         try:
             kid = jwt.get_unverified_header(token).get("kid")
         except jwt.PyJWTError as exc:
@@ -188,6 +191,7 @@ class JwtVerifier:
 
         key = self._signing_key(kid)
         try:
+            # decode() checks the signature plus exp/iss/aud; ``require`` rejects tokens that omit them.
             claims = jwt.decode(
                 token,
                 key.key,
@@ -208,12 +212,14 @@ class JwtVerifier:
         except jwt.PyJWTError as exc:
             raise AuthError("invalid_token") from exc
 
+        # A valid token without our customer claim cannot be mapped to a customer, so it is rejected.
         customer_id = claims.get(self._customer_claim)
         if not isinstance(customer_id, str) or not customer_id:
             raise AuthError("missing_claim")
         return VerifiedUser(customer_id=customer_id)
 
 
+# Lazily created singleton so the JWKS cache is shared by every call in the process.
 _default_verifier: JwtVerifier | None = None
 
 

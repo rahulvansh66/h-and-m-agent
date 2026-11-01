@@ -132,6 +132,7 @@ async def _send(
         httpx.HTTPError: If the agent cannot be reached or times out.
     """
     async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks(), auth=request_auth()) as http:
+        # The Agent Card is the contract: it says whether the agent supports streaming and push notifications.
         card = await A2ACardResolver(http, url).get_agent_card()
         client = ClientFactory(ClientConfig(streaming=False, httpx_client=http)).create(card)
         use_push = push is not None and card.capabilities.push_notifications
@@ -152,6 +153,7 @@ async def _send(
             configuration=configuration,
             metadata=_request_metadata(customer_id, thread_id, user_token),
         )
+        # send_message yields a stream of responses even in non-streaming mode; the last Task seen is the result.
         task = None
         async for response in client.send_message(request):
             if response.HasField("task"):
@@ -308,16 +310,20 @@ async def _stream(
             configuration=configuration,
             metadata=_request_metadata(customer_id, thread_id, user_token),
         )
+        # Translate the protocol's response union into our small RemoteEvent vocabulary.
         async for response in client.send_message(request):
             if response.HasField("task"):
+                # First message of a task: the Task object itself.
                 yield RemoteEvent("started", task_id=response.task.id, push_registered=use_push)
             elif response.HasField("status_update"):
                 status = response.status_update.status
                 if status.state == TaskState.TASK_STATE_WORKING and status.message.parts:
+                    # A "working" update with text is a human-readable progress line.
                     yield RemoteEvent("progress", text=get_message_text(status.message))
                 elif status.state in _TERMINAL_STATES:
                     yield RemoteEvent("state", state=TaskState.Name(status.state))
             elif response.HasField("artifact_update"):
+                # Artifact appends carry the reply text in order; the caller joins them.
                 yield RemoteEvent("answer", text=get_artifact_text(response.artifact_update.artifact, delimiter=""))
         await client.close()
 
@@ -353,6 +359,7 @@ def stream_remote_agent(
     Raises:
         httpx.HTTPError: If the agent cannot be reached or the stream breaks mid-way.
     """
+    # A private loop (not asyncio.run) so one async generator can be advanced step by step between yields.
     loop = asyncio.new_event_loop()
     events = _stream(url, text, history, customer_id, thread_id, timeout_s, push, user_token)
     try:
@@ -362,5 +369,6 @@ def stream_remote_agent(
             except StopAsyncIteration:
                 return
     finally:
+        # Always close the generator (releases the HTTP connection) even if the consumer stops early.
         loop.run_until_complete(events.aclose())
         loop.close()

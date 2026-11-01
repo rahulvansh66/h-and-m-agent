@@ -47,6 +47,7 @@ async def inject_customer_id(
         if auth_enabled():
             raise PermissionError("no verified customer id in the run config")
         customer_id = DEFAULT_CUSTOMER_ID
+    # Put the trusted id last so it always wins over anything the model put in the arguments.
     return await handler(request.override(args={**request.args, CUSTOMER_ID_ARG: customer_id}))
 
 
@@ -59,6 +60,7 @@ def hide_customer_id(tool: BaseTool) -> BaseTool:
     Returns:
         BaseTool: The same tool, with the argument no longer advertised to the model.
     """
+    # Copy first so the shared schema dict is not mutated; drop the arg from both properties and required.
     schema = dict(tool.args_schema)
     schema["properties"] = {k: v for k, v in schema.get("properties", {}).items() if k != CUSTOMER_ID_ARG}
     schema["required"] = [name for name in schema.get("required", []) if name != CUSTOMER_ID_ARG]

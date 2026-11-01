@@ -18,31 +18,33 @@ RAG_MIN_SCORE = _CONFIG["rag"]["min_score"]  # minimum similarity for a chunk to
 RAG_CONDENSE_HISTORY = _CONFIG["rag"]["condense_history_messages"]  # messages used to condense the query
 SUPERVISOR_HISTORY = _CONFIG["supervisor"]["history_messages"]  # messages the supervisor sees when routing
 SUPERVISOR_MAX_AGENTS = _CONFIG["supervisor"]["max_agents"]  # agents a multi-intent message may fan out to
-SUPERVISOR_SYNTHESIS_MODEL = _CONFIG["supervisor"]["synthesis_model"]  # llm size that merges answers of a split message
+SUPERVISOR_SYNTHESIS_MODEL = _CONFIG["supervisor"]["synthesis_model"]  # llm size that composes a flagged split answer
+SUPERVISOR_BRANCH_TIMEOUT_S = _CONFIG["supervisor"]["branch_timeout_s"]  # per-agent deadline on a split turn
 SUPERVISOR_STICKY_MAX_WORDS =_CONFIG["supervisor"]["sticky_max_words"]  # longest follow-up kept with the last agent without an LLM call
 FASHION_COLLECTION = _CONFIG["fashion"]["collection"]  # Qdrant collection holding the product catalog vectors
 FASHION_EMBEDDING = _CONFIG["fashion"]["embedding"]  # fastembed model of the product catalog collection
 FASHION_TOP_K = _CONFIG["fashion"]["top_k"]  # products fetched per search
 FASHION_MIN_SCORE = _CONFIG["fashion"]["min_score"]  # minimum similarity for a product to be returned
 FASHION_MCP_HOST = _CONFIG["fashion"]["mcp_host"]  # interface of the long-lived fashion MCP server
-FASHION_MCP_PORT = _CONFIG["fashion"]["mcp_port"]
+FASHION_MCP_PORT = _CONFIG["fashion"]["mcp_port"]  # port of the fashion MCP server
 CHECKPOINT_SCHEMA = _CONFIG["database"]["checkpoint_schema"]  # Neon schema for LangGraph checkpoints
-LOG_LEVEL = _CONFIG["logging"]["level"]
-TRACING_TAGS = _CONFIG["tracing"]["tags"]
+LOG_LEVEL = _CONFIG["logging"]["level"]  # root log level, applied by configure_logging
+TRACING_TAGS = _CONFIG["tracing"]["tags"]  # Langfuse tags added to every trace
 A2A_HOST = _CONFIG["a2a"]["host"]  # interface the agent services bind to
 A2A_TIMEOUT_S = _CONFIG["a2a"]["request_timeout_s"]  # supervisor-side timeout per agent call
 A2A_HISTORY = _CONFIG["a2a"]["history_messages"]  # prior messages sent to an agent as context
 A2A_WEBHOOK_PORT = _CONFIG["a2a"]["webhook_port"]  # port of the supervisor's push-notification receiver
 SHIPMENT_CARRIER_DELAY_S = _CONFIG["shipment"]["carrier_delay_s"]  # simulated carrier lookup time
 RUNTIME_PORT = _CONFIG["runtime"]["port"]  # port of the AgentCore entrypoint
-RUNTIME_POOL_MAX_SIZE = _CONFIG["runtime"]["pool_max_size"]
-RUNTIME_MAX_MESSAGE_CHARS = _CONFIG["runtime"]["max_message_chars"]
+RUNTIME_POOL_MAX_SIZE = _CONFIG["runtime"]["pool_max_size"]  # most Neon connections the checkpointer pool opens
+RUNTIME_MAX_MESSAGE_CHARS = _CONFIG["runtime"]["max_message_chars"]  # longest customer message accepted
 A2A_PORTS = {name: spec["port"] for name, spec in _CONFIG["a2a"]["agents"].items()}  # agent name -> port
 AUTH_AUDIENCE = _CONFIG["auth"]["audience"]  # expected token `aud`
 AUTH_CUSTOMER_CLAIM = _CONFIG["auth"]["customer_claim"]  # namespaced claim holding the customer id
 AUTH_JWKS_CACHE_TTL_S = _CONFIG["auth"]["jwks_cache_ttl_s"]  # in-memory signing-key cache lifetime
 AWS_REGION = _CONFIG["aws"]["region"]  # region of the AgentCore Runtimes (used for SigV4 signing)
 
+# Accepted (case-insensitive) spellings of "on" for environment-variable switches; anything else is off.
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -179,6 +181,7 @@ __all__ = [
     "SUPERVISOR_HISTORY",
     "SUPERVISOR_MAX_AGENTS",
     "SUPERVISOR_SYNTHESIS_MODEL",
+    "SUPERVISOR_BRANCH_TIMEOUT_S",
     "SUPERVISOR_STICKY_MAX_WORDS",
     "FASHION_COLLECTION",
     "FASHION_EMBEDDING",

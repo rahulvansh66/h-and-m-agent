@@ -9,6 +9,7 @@ reply (``OUT_OF_SCOPE_REPLY``) defined here. It is not an A2A agent: it has no L
 """
 
 import logging
+import uuid
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -30,6 +31,7 @@ from hm_agent.core.state import (
 
 logger = logging.getLogger(__name__)
 
+# Fixed decline text: no LLM involved, so the wording is predictable and free.
 OUT_OF_SCOPE_REPLY = (
     "I can help with questions about your orders and purchases, where your parcel is, "
     "damaged or defective items, and outfit or product suggestions. "
@@ -70,10 +72,14 @@ You are given the recent conversation. Choose the agent for the latest customer 
   conversation to resolve "it" or "that". Keep order ids and product names exactly as written.
 - With a single task leave `query` null; the agent then receives the customer's own words.
 - Never combine out_of_scope with another agent.
+- Set `needs_combination` to true only when you gave several tasks AND the final answer must reason
+  across the agents' answers (e.g. "is it worth returning the jacket given when it arrives?"). For
+  independent questions ("where is ORD-1001, and what goes with my jacket?") leave it false.
 
 # OUTPUT
 Return the structured fields only: `tasks` (each with `agent`: order_management | customer_support |
-shipment_tracking | fashion | out_of_scope, and `query`) and `reason` (one short sentence).
+shipment_tracking | fashion | out_of_scope, and `query`), `reason` (one short sentence) and
+`needs_combination` (true or false).
 """
 
 # A short message starting with one of these is a follow-up on the topic of the previous answer.
@@ -93,10 +99,11 @@ def _render_transcript(messages: list[AnyMessage]) -> str:
         str: One ``Speaker: text`` line per message, limited to the last ``SUPERVISOR_HISTORY``.
     """
     lines = []
-    for m in messages[-SUPERVISOR_HISTORY:]:
+    for m in messages[-SUPERVISOR_HISTORY:]:  # only a recent window: keeps the routing prompt small and cheap
         if isinstance(m, HumanMessage):
             lines.append(f"Customer: {m.text}")
         else:
+            # A merged multi-agent reply has no single author, so list every agent that contributed.
             if m.name == MULTI_AGENT:
                 label = f"Assistant (multi: {', '.join(m.additional_kwargs.get('agents', []))})"
             else:
@@ -119,13 +126,15 @@ def _sticky_agent(messages: list[AnyMessage]) -> AgentName | None:
     Returns:
         AgentName | None: The agent that wrote the previous answer, or None to ask the LLM.
     """
+    # Disabled by config, no previous answer to stay with, or the last message is not from the customer.
     if SUPERVISOR_STICKY_MAX_WORDS <= 0 or len(messages) < 2 or not isinstance(messages[-1], HumanMessage):
         return None
     previous = messages[-2]
     if not isinstance(previous, AIMessage) or previous.name not in SPECIALIST_AGENTS:
         return None  # no label, a decline, or a merged multi-agent answer: let the model decide
+    # ``startswith`` accepts a tuple, so this matches any of the follow-up cues.
     text = messages[-1].text.strip().lower()
-    if len(text.split()) > SUPERVISOR_STICKY_MAX_WORDS or not text.startswith(FOLLOW_UP_CUES):
+    if len(text.split()) >SUPERVISOR_STICKY_MAX_WORDS or not text.startswith(FOLLOW_UP_CUES):
         return None
     return previous.name
 
@@ -143,8 +152,11 @@ def normalise_tasks(tasks: list[AgentTask]) -> list[AgentTask]:
     Returns:
         list[AgentTask]: One to ``SUPERVISOR_MAX_AGENTS`` tasks, never empty if ``tasks`` was not.
     """
+    # De-duplicate by agent, keeping the first task per agent (``seen.add`` returns None, so it only
+    # records the name; the ``or`` short-circuits to True for repeats).
     seen: set[str] = set()
     unique = [t for t in tasks if not (t.agent in seen or seen.add(t.agent))]
+    # out_of_scope never runs alongside real agents; it is kept only when it is the sole task.
     real = [t for t in unique if t.agent != OUT_OF_SCOPE]
     kept = (real or unique)[:SUPERVISOR_MAX_AGENTS]
     if len(kept) == 1:
@@ -162,28 +174,39 @@ def supervisor_node(state: AgentState) -> dict:
     (customer support): that agent's relevance gate handles off-topic text cheaply, whereas a wrong
     ``out_of_scope`` would turn a customer away.
 
-    Reads: ``messages``. Writes: ``tasks`` and an empty ``results`` (clears leftovers of an earlier turn).
+    Reads: ``messages``. Writes: ``tasks``, an empty ``results`` (clears leftovers of an earlier turn),
+    ``combine`` (the planner asked for a composed answer, honoured only with 2+ agents) and a fresh
+    ``turn_id`` that ties the parallel branches to one stream coordinator.
 
     Args:
         state: Current graph state.
 
     Returns:
-        dict: ``{"tasks": list[AgentTask], "results": []}``.
+        dict: ``{"tasks": list[AgentTask], "results": [], "combine": bool, "turn_id": str}``.
     """
+    # Fresh id per turn: parallel branches use it to find the same SplitStream coordinator.
+    turn_id = uuid.uuid4().hex
+    # Cheap path first: a short follow-up skips the routing LLM call entirely.
     sticky = _sticky_agent(state["messages"])
     if sticky:
         logger.info("node=supervisor status=sticky agent=%s", sticky)
-        return {"tasks": [AgentTask(agent=sticky)], "results": []}
+        return {"tasks": [AgentTask(agent=sticky)], "results": [], "combine": False, "turn_id": turn_id}
+    # Structured output forces the model to answer in the SupervisorDecision schema (valid agent names only).
+    # It can still return None if the provider fails to produce a parsable object, handled just below.
     llm = load_model("small").with_structured_output(SupervisorDecision)
     decision: SupervisorDecision | None = llm.invoke(
         [SystemMessage(SUPERVISOR_PROMPT), HumanMessage(_render_transcript(state["messages"]))]
     )
     if decision is None:
         logger.warning("node=supervisor status=no_decision fallback=%s", DEFAULT_AGENT)
-        return {"tasks": [AgentTask(agent=DEFAULT_AGENT)], "results": []}
+        return {"tasks": [AgentTask(agent=DEFAULT_AGENT)], "results": [], "combine": False, "turn_id": turn_id}
     tasks = normalise_tasks(decision.tasks)
-    logger.info("node=supervisor agents=%s reason=%s", ",".join(t.agent for t in tasks), decision.reason)
-    return {"tasks": tasks, "results": []}
+    # A composed answer only makes sense with 2+ agents; the model may set the flag on a single task.
+    combine = decision.needs_combination and len(tasks) > 1
+    logger.info(
+        "node=supervisor agents=%s combine=%s reason=%s", ",".join(t.agent for t in tasks), combine, decision.reason
+    )
+    return {"tasks": tasks, "results": [], "combine": combine, "turn_id": turn_id}
 
 
 def route_to_agent(state: AgentState) -> list[Send]:
@@ -192,7 +215,10 @@ def route_to_agent(state: AgentState) -> list[Send]:
     Each agent node receives the message history plus its own ``query`` (None for a single-agent
     turn, so it falls back to the customer's message).
 
-    Reads: ``tasks``, ``messages``. Writes: nothing.
+    On a split turn the payload also carries ``turn_id`` and ``combine`` so the branches can stream
+    through the turn's coordinator (or stay silent when the answer is to be composed).
+
+    Reads: ``tasks``, ``messages``, ``turn_id``, ``combine``. Writes: nothing.
     Possible next nodes: ``order_management``, ``customer_support``, ``shipment_tracking``, ``fashion``, ``out_of_scope``.
 
     Args:
@@ -201,14 +227,28 @@ def route_to_agent(state: AgentState) -> list[Send]:
     Returns:
         list[Send]: One ``Send`` per task.
     """
-    return [Send(t.agent, {"messages": state["messages"], "query": t.query}) for t in state["tasks"]]
+    # ``Send`` runs each target node with its own private payload (not the shared graph state), which is how
+    # parallel branches get different sub-queries; LangGraph executes all of them in the same superstep.
+    # Send class will return : Send(node_name, payload)
+    return [
+        Send(
+            t.agent,
+            {
+                "messages": state["messages"],
+                "query": t.query,
+                "turn_id": state.get("turn_id", ""),
+                "combine": state.get("combine", False),
+            },
+        )
+        for t in state["tasks"]
+    ]
 
 
 def route_after_agent(state: AgentState) -> str:
-    """Conditional edge after an agent node: merge on a split turn, otherwise finish.
+    """Conditional edge after an agent node: close the turn in synthesize on a split turn, otherwise finish.
 
     A single-agent turn has no ``results``, so it ends exactly as before (which also keeps pushed
-    results, added to the thread as the agent's node, from triggering a merge).
+    results, added to the thread as the agent's node, from triggering ``synthesize``).
 
     Reads: ``results``. Writes: nothing.
 

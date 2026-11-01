@@ -33,6 +33,7 @@ def find_order_id(text: str, history: list[dict]) -> str | None:
     Returns:
         str | None: Order id in upper case (e.g. ``ORD-1007``), or None if none was mentioned.
     """
+    # Search order: latest message first, then history newest to oldest; the first match wins.
     for candidate in [text, *(m["text"] for m in reversed(history))]:
         match = ORDER_ID_PATTERN.search(candidate)
         if match:
@@ -63,4 +64,5 @@ def shipment_runner(text: str, history: list[dict], customer_id: str, thread_id:
         logger.warning("agent=shipment_tracking step=order_not_owned thread_id=%s", thread_id)
         yield answer(ORDER_NOT_FOUND_REPLY)
         return
+    # Ownership verified: run the slow lookup, forwarding its progress lines and final status.
     yield from stream_carrier_status(order_id)

@@ -162,6 +162,75 @@ def test_split_turn_returns_a_result_and_streams_no_tokens(monkeypatch: pytest.M
     assert [w["type"] for w in written] == ["started", "progress"]
 
 
+def _split_run(monkeypatch: pytest.MonkeyPatch, **state_extra) -> tuple[list[dict], list[float], dict]:
+    """Run one split-turn branch with a fake client and return the written events and timeout used.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Used to replace the client, receiver and stream writer.
+        **state_extra: Extra state keys, e.g. ``turn_id`` and ``combine``.
+
+    Returns:
+        tuple: ``(written events, timeouts passed to the client, node output)``.
+    """
+    written: list[dict] = []
+    timeouts: list[float] = []
+
+    def fake_stream(url, text, history, customer_id, thread_id, timeout, **kwargs):
+        timeouts.append(timeout)
+        yield RemoteEvent("answer", text="Done.")
+        yield RemoteEvent("state", state=COMPLETED_STATE)
+
+    monkeypatch.setattr(remote_node, "get_receiver", lambda: None)
+    monkeypatch.setattr(remote_node, "get_stream_writer", lambda: written.append)
+    monkeypatch.setattr(remote_node, "stream_remote_agent", fake_stream)
+    config = {"configurable": {"customer_id": "cust001", "thread_id": "t1"}}
+    state = {"messages": [HumanMessage("two things")], "query": "Where is ORD-1007?", **state_extra}
+    return written, timeouts, remote_node.make_remote_agent_node(AGENT)(state, config)
+
+
+def test_split_branch_streams_through_the_turn_coordinator_with_the_branch_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a turn id the pieces are shown by the coordinator (as multi_agent tokens) and the branch deadline applies."""
+    from hm_agent.core.settings import SUPERVISOR_BRANCH_TIMEOUT_S
+    from hm_agent.supervisor import split_stream
+
+    written, timeouts, out = _split_run(monkeypatch, turn_id="turn-r1")
+    shown = [e for e in written if e["type"] == "token"]
+    assert [e["agent"] for e in shown] == ["multi_agent", "multi_agent"]  # lead-in, then the piece
+    assert "".join(e["text"] for e in shown).endswith("Done.")
+    assert timeouts == [SUPERVISOR_BRANCH_TIMEOUT_S] and out["results"][0].status == "complete"
+    assert split_stream.pop_split_stream("turn-r1").streamed == {AGENT}
+
+
+def test_split_branch_stays_silent_when_the_answer_is_to_be_composed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ``combine`` set the branch only returns its result; nothing is shown until synthesize composes."""
+    from hm_agent.supervisor import split_stream
+
+    written, _, out = _split_run(monkeypatch, turn_id="turn-r2", combine=True)
+    assert [e for e in written if e["type"] == "token"] == [] and out["results"][0].text == "Done."
+    assert split_stream.active_turns() == 0  # no coordinator was even created
+
+
+def test_single_turn_uses_the_normal_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single-agent call keeps the long A2A timeout and writes its own tokens."""
+    from hm_agent.core.settings import A2A_TIMEOUT_S
+
+    timeouts: list[float] = []
+    written: list[dict] = []
+
+    def fake_stream(url, text, history, customer_id, thread_id, timeout, **kwargs):
+        timeouts.append(timeout)
+        yield RemoteEvent("answer", text="Hi.")
+        yield RemoteEvent("state", state=COMPLETED_STATE)
+
+    monkeypatch.setattr(remote_node, "get_receiver", lambda: None)
+    monkeypatch.setattr(remote_node, "get_stream_writer", lambda: written.append)
+    monkeypatch.setattr(remote_node, "stream_remote_agent", fake_stream)
+    config = {"configurable": {"customer_id": "cust001", "thread_id": "t1"}}
+    out = remote_node.make_remote_agent_node(AGENT)({"messages": [HumanMessage("hi")]}, config)
+    assert timeouts == [A2A_TIMEOUT_S] and written == [{"type": "token", "agent": AGENT, "text": "Hi."}]
+    assert out["messages"][0].text == "Hi."
+
+
 def test_user_token_from_run_config_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The token in the run config reaches the client call; without one an empty token is passed."""
     from hm_agent.auth import USER_TOKEN_CONFIG_KEY

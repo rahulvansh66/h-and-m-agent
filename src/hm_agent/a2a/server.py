@@ -91,6 +91,7 @@ def graph_runner(
         Yields:
             Chunk: Progress lines and answer pieces, in order.
         """
+        # The agent is stateless: the supervisor owns the conversation and sends the recent turns every call.
         messages: list[AnyMessage] = [
             HumanMessage(m["text"]) if m["role"] == "user" else AIMessage(m["text"], name=m.get("name"))
             for m in history
@@ -106,6 +107,8 @@ def graph_runner(
                 "langfuse_tags": [*TRACING_TAGS, f"a2a-{agent}"],
             },
         }
+        # buffer: tokens not yet sent. streamed: any answer chunk already sent. final_text: fallback reply
+        # taken from the finished graph state when no tokens were streamed.
         buffer, streamed, final_text = "", False, ""
         try:
             for mode, data in graph.stream({"messages": messages}, config, stream_mode=["messages", "updates", "values"]):
@@ -114,6 +117,7 @@ def graph_runner(
                     # Only plain model text; tool-call fragments are not part of the reply.
                     if stream_tokens and isinstance(token, AIMessageChunk) and token.text and not token.tool_call_chunks:
                         buffer += token.text
+                        # Batch tiny tokens: one A2A event per token would flood the wire.
                         if len(buffer) >= TOKEN_FLUSH_CHARS:
                             yield answer(buffer)
                             buffer, streamed = "", True
@@ -166,18 +170,21 @@ class RunnerExecutor(AgentExecutor):
             event_queue (EventQueue): Queue the task events are published to.
         """
         task_id, context_id = context.task_id, context.context_id
+        # TaskUpdater publishes the lifecycle events (working, artifact, completed/failed) to the queue.
         updater = TaskUpdater(event_queue, task_id, context_id)
         if context.current_task is None:
             # First event of a task must be the Task itself (state submitted).
             await event_queue.enqueue_event(new_task_from_user_message(context.message))
         await updater.start_work()
 
+        # The message has a text part (latest question) and a data part (prior turns), see the client.
         text = context.get_user_input()
         data = get_data_parts(context.message.parts)
         history = data[0].get("history", []) if data else []
         customer_id = context.metadata.get("customer_id", "")
         thread_id = context.metadata.get("thread_id", context_id)
         if auth_enabled():
+            # Never trust the claimed customer_id on its own: replace it with the one proven by the token.
             verified = await self._verify_customer(context, customer_id, task_id)
             if verified is None:
                 await updater.failed(new_text_message(REJECTED_MESSAGE))
@@ -219,6 +226,8 @@ class RunnerExecutor(AgentExecutor):
             )
             sent_answer, reply_chars, held = True, reply_chars + len(held.text), None
 
+        # Consume until the end marker (None). Progress goes out at once; answer chunks are held one step
+        # back, because only when the next item arrives (or the stream ends) do we know if a chunk was the last.
         while (item := await outbox.get()) is not None:
             if isinstance(item, Exception):
                 await worker
@@ -226,7 +235,8 @@ class RunnerExecutor(AgentExecutor):
                     "agent=%s status=failed task_id=%s context_id=%s error=%s",
                     self._agent, task_id, context_id, type(item).__name__,
                 )
-                await updater.failed(new_text_message("The agent could not process this request."))
+                # Generic text on purpose: internal error details are only in the server log.
+                await updater.failed(new_text_message(REJECTED_MESSAGE))
                 return
             events += 1
             if item.kind == "progress":

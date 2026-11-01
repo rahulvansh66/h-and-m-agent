@@ -84,6 +84,7 @@ async def lifespan(_app: Starlette):
     Yields:
         None: Control while the server runs.
     """
+    # Pooled (not single-connection) checkpointer: the Runtime can serve several requests concurrently.
     with neon_checkpointer_pool(RUNTIME_POOL_MAX_SIZE) as checkpointer:
         _state.graph = build_graph(checkpointer)
         logger.info("component=runtime status=started pool_max_size=%d auth_enabled=%s", RUNTIME_POOL_MAX_SIZE, auth_enabled())
@@ -108,6 +109,7 @@ def bearer_token(context: RequestContext) -> str:
     Returns:
         str: The token without the ``Bearer`` prefix, or an empty string if absent.
     """
+    # Scheme match is case-insensitive per RFC 7235; the token itself is returned unchanged.
     value = (context.request_headers or {}).get("Authorization", "").strip()
     return value[len(BEARER_PREFIX):].strip() if value.lower().startswith(BEARER_PREFIX) else ""
 
@@ -127,6 +129,7 @@ def resolve_identity(payload: dict, context: RequestContext) -> tuple[str, str |
     Raises:
         AuthError: If auth is enabled and the token is missing or invalid.
     """
+    # Local development only: with auth off, the body's customer_id is trusted.
     if not auth_enabled():
         return str(payload.get("customer_id") or DEFAULT_CUSTOMER_ID), None
     token = bearer_token(context)
@@ -205,8 +208,9 @@ async def _handle(payload: dict, context: RequestContext) -> AsyncIterator[dict]
         dict: Events. Failures become an ``error`` event, never an exception.
     """
     start = time.perf_counter()
+    # The Runtime session id doubles as the conversation thread; a new one is minted if the caller sent none.
     thread_id = context.session_id or str(uuid.uuid4())
-    status = "complete"
+    status = "complete"  # outcome label for the final log line; downgraded on each failure path below
     try:
         try:
             customer_id, user_token = resolve_identity(payload, context)
@@ -230,6 +234,7 @@ async def _handle(payload: dict, context: RequestContext) -> AsyncIterator[dict]
         if payload.get("action") == "history":
             yield await asyncio.to_thread(load_history, graph, thread_id)
             return
+        # Validate the input after the ownership check so a stranger learns nothing about the thread.
         message = _valid_message(payload)
         if message is None:
             status = "bad_request"
@@ -240,6 +245,7 @@ async def _handle(payload: dict, context: RequestContext) -> AsyncIterator[dict]
                 status = "failed"
             yield event
     except Exception:
+        # Last resort: the client gets a generic error event; the traceback stays in the logs.
         status = "failed"
         logger.exception("component=runtime status=failed thread_id=%s", thread_id)
         yield {"type": "error", "detail": ERROR_DETAIL}

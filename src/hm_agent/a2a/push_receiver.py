@@ -130,10 +130,12 @@ class PushReceiver:
         Raises:
             RuntimeError: If the server did not come up within ``STARTUP_TIMEOUT_S`` seconds.
         """
+        # uvicorn runs in a daemon thread so the receiver never blocks interpreter exit.
         app = Starlette(routes=[Route(NOTIFY_PATH, self._handle, methods=["POST"])])
         self._server = uvicorn.Server(uvicorn.Config(app, host=A2A_HOST, port=self._port, log_level="warning", timeout_keep_alive=KEEP_ALIVE_S))
         self._thread = threading.Thread(target=self._server.run, name="a2a-push-receiver", daemon=True)
         self._thread.start()
+        # Poll until uvicorn reports it is listening, so callers can register webhooks right after start().
         deadline = time.monotonic() + STARTUP_TIMEOUT_S
         while not self._server.started:
             if time.monotonic() > deadline or not self._thread.is_alive():
@@ -202,6 +204,7 @@ class PushReceiver:
         Returns:
             Response: 401 for a bad token, 400 for a non-JSON body, otherwise 200.
         """
+        # Constant-time comparison avoids leaking the shared token through response timing.
         if not hmac.compare_digest(request.headers.get(TOKEN_HEADER, ""), self._token):
             logger.warning("component=push_receiver status=rejected reason=bad_token")
             return JSONResponse({"error": "invalid token"}, status_code=401)
@@ -216,9 +219,12 @@ class PushReceiver:
         if state in _TERMINAL_STATES:
             with self._changed:
                 known = task_id in self._pending
+                # Race: the agent can finish before register() runs. Park the state so register() delivers it.
+                # Tasks already claimed (delivered or streamed) are ignored.
                 if not known and task_id not in self._claimed:
                     self._finished_early[task_id] = state
             if known:
+                # _finish does blocking I/O (GetTask), so keep it off the event loop.
                 await asyncio.to_thread(self._finish, task_id, state)
         return Response(status_code=200)
 
@@ -244,6 +250,7 @@ class PushReceiver:
         except Exception:
             logger.exception("component=push_receiver status=deliver_failed task_id=%s", task_id)
         finally:
+            # Always clear the task and wake ``wait_idle`` callers, even when delivery failed.
             with self._changed:
                 self._pending.pop(task_id, None)
                 self._changed.notify_all()

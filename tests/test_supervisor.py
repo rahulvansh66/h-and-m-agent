@@ -188,21 +188,55 @@ def test_route_after_agent_merges_only_when_results_exist() -> None:
     assert supervisor.route_after_agent({"results": []}) == END
 
 
-def test_turn_emits_one_agent_selected_per_task_and_one_merged_reply() -> None:
-    """A split turn gives one agent_selected per agent, no branch replies, and one merged reply."""
+def test_needs_combination_is_kept_only_with_several_agents(router) -> None:
+    """The planner's flag counts only when two agents remain; every turn gets a fresh turn id."""
+    router(
+        SupervisorDecision(
+            tasks=[AgentTask(agent="shipment_tracking", query="when does it arrive"), AgentTask(agent="customer_support", query="can I return it")],
+            reason="test",
+            needs_combination=True,
+        )
+    )
+    out = supervisor.supervisor_node({"messages": [HumanMessage("is it worth returning given when it arrives?")]})
+    assert out["combine"] is True and len(out["turn_id"]) == 32
+    router(SupervisorDecision(tasks=[AgentTask(agent="fashion", query="x")], reason="test", needs_combination=True))
+    single = supervisor.supervisor_node({"messages": [HumanMessage("what goes with it?")]})
+    assert single["combine"] is False and single["turn_id"] != out["turn_id"]
+
+
+def test_route_payload_carries_turn_id_and_combine() -> None:
+    """Each branch receives the turn id and the combine flag so it can use the turn's coordinator."""
+    sends = supervisor.route_to_agent(
+        {
+            "messages": [HumanMessage("hi")],
+            "tasks": [AgentTask(agent="fashion", query="q1"), AgentTask(agent="order_management", query="q2")],
+            "turn_id": "abc",
+            "combine": True,
+        }
+    )
+    assert all(s.arg["turn_id"] == "abc" and s.arg["combine"] is True for s in sends)
+
+
+def test_turn_emits_one_agent_selected_per_task_streamed_sections_and_one_reply(caplog: pytest.LogCaptureFixture) -> None:
+    """A split turn gives one agent_selected per agent, section tokens, one reply, and a TTFT log line."""
 
     class Graph:
         def stream(self, *_args, **_kwargs):
             yield "updates", {"supervisor": {"tasks": [AgentTask(agent="fashion", query="a"), AgentTask(agent="order_management", query="b")]}}
+            yield "custom", {"type": "token", "agent": "multi_agent", "text": "About your orders:\nYou bought a jacket."}
             yield "updates", {"fashion": {"results": ["r1"]}}
             yield "updates", {"order_management": {"results": ["r2"]}}
-            yield "custom", {"type": "token", "agent": "multi_agent", "text": "merged"}
+            yield "custom", {"type": "token", "agent": "multi_agent", "text": "\n\nAbout outfits:\nJeans."}
             yield "updates", {"synthesize": {"messages": [AIMessage("merged", name="multi_agent")], "results": []}}
 
-    events = list(turns.stream_turn(Graph(), "q", "cust001", "t1"))
+    with caplog.at_level("INFO", logger="hm_agent.turns"):
+        events = list(turns.stream_turn(Graph(), "q", "cust001", "t1"))
     assert [(e["type"], e["agent"]) for e in events] == [
         ("agent_selected", "fashion"),
         ("agent_selected", "order_management"),
         ("token", "multi_agent"),
+        ("token", "multi_agent"),
         ("reply", "multi_agent"),
     ]
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("turn status=done"))
+    assert "split=True" in line and "agents=2" in line and "ttft_s=" in line and "ttft_s=none" not in line

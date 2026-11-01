@@ -83,6 +83,8 @@ class SigV4Auth(httpx.Auth):
         Raises:
             RuntimeError: If no AWS credentials are available.
         """
+        # Build a botocore request from the httpx one, let botocore compute the signature, then copy the
+        # resulting auth headers back. The body bytes are signed, so they must match what is sent.
         signed_headers = {n: v for n, v in request.headers.items() if n.lower() in _SIGNED_REQUEST_HEADERS}
         aws_request = AWSRequest(method=request.method, url=str(request.url), data=request.content, headers=signed_headers)
         BotocoreSigV4Auth(self._credentials_provider(), self._service, self._region).add_auth(aws_request)

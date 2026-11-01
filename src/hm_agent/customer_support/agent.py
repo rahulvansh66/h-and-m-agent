@@ -86,11 +86,12 @@ def condense_query_node(state: CustomerSupportState) -> dict:
     if sum(isinstance(m, HumanMessage) for m in messages) <= 1:
         return {"query": latest}
 
+    # Only a recent window of the conversation is needed to resolve "it" / "that one".
     history = "\n".join(f"{_role_label(m)}: {m.text}" for m in messages[-RAG_CONDENSE_HISTORY:])
     response = load_model("small").invoke(
         [SystemMessage(CONDENSE_PROMPT), HumanMessage(f"Conversation:\n{history}")]
     )
-    query = str(response.content).strip() or latest
+    query = str(response.content).strip() or latest  # empty model output falls back to the raw message
     logger.info("node=condense_query status=complete history_messages=%d", len(messages))
     return {"query": query}
 
