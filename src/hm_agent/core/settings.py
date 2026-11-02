@@ -43,6 +43,17 @@ AUTH_AUDIENCE = _CONFIG["auth"]["audience"]  # expected token `aud`
 AUTH_CUSTOMER_CLAIM = _CONFIG["auth"]["customer_claim"]  # namespaced claim holding the customer id
 AUTH_JWKS_CACHE_TTL_S = _CONFIG["auth"]["jwks_cache_ttl_s"]  # in-memory signing-key cache lifetime
 AWS_REGION = _CONFIG["aws"]["region"]  # region of the AgentCore Runtimes (used for SigV4 signing)
+PROMPT_LABEL = _CONFIG["langfuse"]["prompt_label"]  # Langfuse prompt label fetched at runtime
+PROMPT_CACHE_TTL_S = _CONFIG["langfuse"]["prompt_cache_ttl_s"]  # client-side prompt cache lifetime
+GUARDRAIL_REGION = _CONFIG["guardrails"]["region"]  # region of the Bedrock guardrail
+GUARDRAIL_CHECK_INPUT = _CONFIG["guardrails"]["check_input"]  # screen the customer message
+GUARDRAIL_CHECK_OUTPUT = _CONFIG["guardrails"]["check_output"]  # screen the final reply
+GUARDRAIL_FAIL_CLOSED_INPUT = _CONFIG["guardrails"]["fail_closed_input"]  # refuse the turn if the input check errors
+GUARDRAIL_BLOCKED_REPLY = _CONFIG["guardrails"]["blocked_reply"]  # fixed reply when the input is blocked
+EVAL_DATASET = _CONFIG["evals"]["dataset"]  # Langfuse dataset name of the golden set
+EVAL_JUDGE_MODEL = _CONFIG["evals"]["judge_model"]  # llm size used as RAGAS / DeepEval judge
+EVAL_PRICING = _CONFIG["evals"]["pricing"]  # model -> {input, output} notional USD per 1M tokens
+EVAL_THRESHOLDS = _CONFIG["evals"]["thresholds"]  # metric -> {min|max} regression-gate bounds
 
 # Accepted (case-insensitive) spellings of "on" for environment-variable switches; anything else is off.
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -115,6 +126,50 @@ def sigv4_enabled() -> bool:
         bool: True when outgoing agent calls must be signed with IAM credentials.
     """
     return _flag("SIGV4_ENABLED", _CONFIG["aws"]["sigv4_enabled"])
+
+
+def guardrails_enabled() -> bool:
+    """Return whether Bedrock Guardrails screen turns (``guardrails.enabled`` or env ``GUARDRAILS_ENABLED``).
+
+    Returns:
+        bool: True when the input and output checks run. Needs ``BEDROCK_GUARDRAIL_ID`` to be set.
+    """
+    return _flag("GUARDRAILS_ENABLED", _CONFIG["guardrails"]["enabled"])
+
+
+def online_scores_enabled() -> bool:
+    """Return whether per-turn scores are written to Langfuse (``evals.online_scores``).
+
+    Returns:
+        bool: True when ``hm_agent.evals.online`` should score each turn.
+    """
+    return _flag("ONLINE_SCORES_ENABLED", _CONFIG["evals"]["online_scores"])
+
+
+def online_relevancy_enabled() -> bool:
+    """Return whether each reply is scored for relevancy to the question (``evals.online_relevancy``).
+
+    Returns:
+        bool: True when ``answer_relevancy_sim`` is computed online (needs the local embedding model in memory).
+    """
+    return _flag("ONLINE_RELEVANCY_ENABLED", _CONFIG["evals"]["online_relevancy"])
+
+
+def guardrail_identity() -> tuple[str, str]:
+    """Return the ``(guardrail_id, version)`` to apply, read at call time because ``.env`` loads late.
+
+    Returns:
+        tuple[str, str]: Guardrail id from env ``BEDROCK_GUARDRAIL_ID`` and the version from env
+        ``BEDROCK_GUARDRAIL_VERSION`` (default: ``guardrails.version`` in the config).
+
+    Raises:
+        RuntimeError: If ``BEDROCK_GUARDRAIL_ID`` is unset or empty.
+    """
+    guardrail_id = os.environ.get("BEDROCK_GUARDRAIL_ID", "").strip()
+    if not guardrail_id:
+        raise RuntimeError("BEDROCK_GUARDRAIL_ID is not set; create one with scripts/aws/create_guardrail.py")
+    version = os.environ.get("BEDROCK_GUARDRAIL_VERSION", "").strip() or _CONFIG["guardrails"]["version"]
+    return guardrail_id, version
 
 
 def agent_port(agent: str) -> int:
@@ -205,6 +260,21 @@ __all__ = [
     "AUTH_CUSTOMER_CLAIM",
     "AUTH_JWKS_CACHE_TTL_S",
     "AWS_REGION",
+    "PROMPT_LABEL",
+    "PROMPT_CACHE_TTL_S",
+    "GUARDRAIL_REGION",
+    "GUARDRAIL_CHECK_INPUT",
+    "GUARDRAIL_CHECK_OUTPUT",
+    "GUARDRAIL_FAIL_CLOSED_INPUT",
+    "GUARDRAIL_BLOCKED_REPLY",
+    "EVAL_DATASET",
+    "EVAL_JUDGE_MODEL",
+    "EVAL_PRICING",
+    "EVAL_THRESHOLDS",
+    "guardrails_enabled",
+    "online_scores_enabled",
+    "online_relevancy_enabled",
+    "guardrail_identity",
     "auth_enabled",
     "auth_issuer",
     "sigv4_enabled",

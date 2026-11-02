@@ -12,12 +12,13 @@ private state (documents, claims, retries); only ``messages`` flows back to the 
 
 import logging
 
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from hm_agent.core.llm import load_model
 from hm_agent.customer_support.rag.pipeline import build_rag_graph
+from hm_agent.core.prompts import get_managed_prompt
 from hm_agent.core.settings import RAG_CONDENSE_HISTORY
 from hm_agent.core.state import CUSTOMER_SUPPORT
 
@@ -39,6 +40,13 @@ the earlier messages (resolve references such as "it", "the second one", "that o
 # OUTPUT
 The standalone question only, on one line.
 """
+
+# Langfuse prompt name and in-code chat fallback (system prompt + the conversation as the user message).
+CONDENSE_PROMPT_NAME = "hm/support-condense"
+CONDENSE_CHAT_PROMPT = [
+    {"role": "system", "content": CONDENSE_PROMPT},
+    {"role": "user", "content": "Conversation:\n{{history}}"},
+]
 
 
 class CustomerSupportState(MessagesState):
@@ -88,9 +96,8 @@ def condense_query_node(state: CustomerSupportState) -> dict:
 
     # Only a recent window of the conversation is needed to resolve "it" / "that one".
     history = "\n".join(f"{_role_label(m)}: {m.text}" for m in messages[-RAG_CONDENSE_HISTORY:])
-    response = load_model("small").invoke(
-        [SystemMessage(CONDENSE_PROMPT), HumanMessage(f"Conversation:\n{history}")]
-    )
+    prompt = get_managed_prompt(CONDENSE_PROMPT_NAME, CONDENSE_CHAT_PROMPT, kind="chat")
+    response = prompt.chain(load_model("small")).invoke({"history": history})
     query = str(response.content).strip() or latest  # empty model output falls back to the raw message
     logger.info("node=condense_query status=complete history_messages=%d", len(messages))
     return {"query": query}

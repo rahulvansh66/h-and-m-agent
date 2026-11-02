@@ -11,12 +11,14 @@ reply (``OUT_OF_SCOPE_REPLY``) defined here. It is not an A2A agent: it has no L
 import logging
 import uuid
 
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from groq import BadRequestError
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from langgraph.types import Send
 
 from hm_agent.core.llm import load_model
+from hm_agent.core.prompts import get_managed_prompt
 from hm_agent.core.settings import SUPERVISOR_HISTORY, SUPERVISOR_MAX_AGENTS, SUPERVISOR_STICKY_MAX_WORDS
 from hm_agent.core.state import (
     DEFAULT_AGENT,
@@ -81,6 +83,13 @@ Return the structured fields only: `tasks` (each with `agent`: order_management 
 shipment_tracking | fashion | out_of_scope, and `query`), `reason` (one short sentence) and
 `needs_combination` (true or false).
 """
+
+# Langfuse prompt name and in-code chat fallback (system prompt + the transcript as the user message).
+SUPERVISOR_PROMPT_NAME = "hm/supervisor-router"
+SUPERVISOR_CHAT_PROMPT = [
+    {"role": "system", "content": SUPERVISOR_PROMPT},
+    {"role": "user", "content": "{{transcript}}"},
+]
 
 # A short message starting with one of these is a follow-up on the topic of the previous answer.
 FOLLOW_UP_CUES = ("what about", "how long", "how much", "how many", "why", "when", "and how long", "and why")
@@ -193,10 +202,18 @@ def supervisor_node(state: AgentState) -> dict:
         return {"tasks": [AgentTask(agent=sticky)], "results": [], "combine": False, "turn_id": turn_id}
     # Structured output forces the model to answer in the SupervisorDecision schema (valid agent names only).
     # It can still return None if the provider fails to produce a parsable object, handled just below.
-    llm = load_model("small").with_structured_output(SupervisorDecision)
-    decision: SupervisorDecision | None = llm.invoke(
-        [SystemMessage(SUPERVISOR_PROMPT), HumanMessage(_render_transcript(state["messages"]))]
-    )
+    prompt = get_managed_prompt(SUPERVISOR_PROMPT_NAME, SUPERVISOR_CHAT_PROMPT, kind="chat")
+    chain = prompt.chain(load_model("small").with_structured_output(SupervisorDecision))
+    try:
+        decision: SupervisorDecision | None = chain.invoke({"transcript": _render_transcript(state["messages"])})
+    except BadRequestError as exc:
+        # Groq answers 400 "tool_use_failed" when the model replies in plain text instead of calling the decision
+        # tool, which is what it does when it refuses an abusive or injection-style message. That is a decline, not
+        # an outage: route to the fixed out-of-scope reply instead of failing the whole turn. Anything else re-raises.
+        if "tool_use_failed" not in str(exc):
+            raise
+        logger.warning("node=supervisor status=model_refused fallback=%s", OUT_OF_SCOPE)
+        return {"tasks": [AgentTask(agent=OUT_OF_SCOPE)], "results": [], "combine": False, "turn_id": turn_id}
     if decision is None:
         logger.warning("node=supervisor status=no_decision fallback=%s", DEFAULT_AGENT)
         return {"tasks": [AgentTask(agent=DEFAULT_AGENT)], "results": [], "combine": False, "turn_id": turn_id}

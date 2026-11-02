@@ -16,12 +16,12 @@ import logging
 import time
 from typing import Literal, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
 from hm_agent.core.llm import load_model
+from hm_agent.core.prompts import get_managed_prompt
 from hm_agent.customer_support.rag.retriever import retrieve
 from hm_agent.core.settings import RAG_MAX_RETRIES, RAG_MIN_SCORE
 
@@ -59,6 +59,18 @@ a short, self-contained keyword-rich query using the terms a help article would 
 # OUTPUT
 The rewritten query only, on one line.
 """
+
+# Langfuse prompt names and in-code chat fallbacks (system prompt + the documents/query as the user message).
+ANSWER_PROMPT_NAME = "hm/support-rag-answer"
+ANSWER_CHAT_PROMPT = [
+    {"role": "system", "content": ANSWER_PROMPT},
+    {"role": "user", "content": "{{context}}\n\nQuestion: {{query}}"},
+]
+REWRITE_PROMPT_NAME = "hm/support-rag-rewrite"
+REWRITE_CHAT_PROMPT = [
+    {"role": "system", "content": REWRITE_PROMPT},
+    {"role": "user", "content": "{{query}}"},
+]
 
 
 class Claim(BaseModel):
@@ -143,11 +155,10 @@ def generate_node(state: RagState) -> dict:
         f'<document id="{i}" title="{d["doc_title"]}" page="{d["page"]}">\n{d["text"]}\n</document>'
         for i, d in enumerate(docs, 1)
     )
-    llm = load_model("small").with_structured_output(CitedAnswer)
+    prompt = get_managed_prompt(ANSWER_PROMPT_NAME, ANSWER_CHAT_PROMPT, kind="chat")
+    chain = prompt.chain(load_model("small").with_structured_output(CitedAnswer))
     start = time.perf_counter()
-    result: CitedAnswer = llm.invoke(
-        [SystemMessage(ANSWER_PROMPT), HumanMessage(f"{context}\n\nQuestion: {state['query']}")]
-    )
+    result: CitedAnswer = chain.invoke({"context": context, "query": state["query"]})
 
     # Guard against hallucinated citations: documents are numbered 1..N in the prompt, so any other
     # number is invalid. A claim with no valid citation is unsupported and is discarded.
@@ -175,9 +186,8 @@ def rewrite_query_node(state: RagState) -> dict:
     Returns:
         dict: The rewritten ``search_query`` and the incremented ``retries``.
     """
-    response = load_model("small").invoke(
-        [SystemMessage(REWRITE_PROMPT), HumanMessage(state["query"])]
-    )
+    prompt = get_managed_prompt(REWRITE_PROMPT_NAME, REWRITE_CHAT_PROMPT, kind="chat")
+    response = prompt.chain(load_model("small")).invoke({"query": state["query"]})
     search_query = str(response.content).strip() or state["query"]
     retries = state.get("retries", 0) + 1
     logger.info("node=rewrite_query retries=%d", retries)

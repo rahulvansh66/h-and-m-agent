@@ -35,13 +35,22 @@ from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langfuse import get_client
-from langfuse.langchain import CallbackHandler
 from langgraph.graph.state import CompiledStateGraph
 from starlette.applications import Starlette
 
 from hm_agent.a2a.chunks import Chunk, answer, progress
 from hm_agent.auth import USER_TOKEN_METADATA_KEY, AuthError, verify_token
-from hm_agent.core.settings import TRACING_TAGS, auth_enabled
+from hm_agent.core.logging_setup import trace_id_var
+from hm_agent.core.settings import auth_enabled
+from hm_agent.core.tracing import (
+    TRACE_ID_CONFIG_KEY,
+    TRACE_ID_METADATA_KEY,
+    build_langfuse_config,
+    incoming_trace_id,
+)
+from hm_agent.evals.online import compute_agent_scores, publish_scores
+from hm_agent.evals.toolcalls import extract_tool_calls
+from hm_agent.evals.usage import summarise_usage, usage_handler
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,21 @@ TOKEN_FLUSH_CHARS = 24  # LLM tokens are grouped into pieces of at least this si
 
 # Runner signature: (latest user text, prior messages, customer_id, thread_id) -> stream of chunks.
 Runner = Callable[[str, list[dict], str, str], Iterator[Chunk]]
+
+
+def _score_run(agent: str, config: RunnableConfig, new_messages: list[AnyMessage], duration_s: float) -> None:
+    """Write the agent-run scores (latency, tool health, tokens, notional cost) onto the turn's trace.
+
+    Args:
+        agent (str): Agent name.
+        config (RunnableConfig): Run config of the finished run (holds the trace id and the usage handler).
+        new_messages (list[AnyMessage]): Messages the run added after the supervisor's history.
+        duration_s (float): Wall time of the run.
+    """
+    trace_id = config["configurable"].get(TRACE_ID_CONFIG_KEY) or getattr(config["callbacks"][0], "last_trace_id", None)
+    handler = usage_handler(config)
+    usage = summarise_usage(handler.usage_metadata) if handler else {}
+    publish_scores(trace_id, compute_agent_scores(agent, extract_tool_calls(new_messages), duration_s, usage))
 
 
 def graph_runner(
@@ -97,19 +121,18 @@ def graph_runner(
             for m in history
         ]
         messages.append(HumanMessage(text))
-        config: RunnableConfig = {
-            "configurable": {"customer_id": customer_id, "thread_id": thread_id},
-            "callbacks": [CallbackHandler()],
-            "run_name": f"a2a-{agent}",
-            "metadata": {
-                "langfuse_session_id": thread_id,
-                "langfuse_user_id": customer_id,
-                "langfuse_tags": [*TRACING_TAGS, f"a2a-{agent}"],
-            },
-        }
+        # Join the supervisor's trace when it sent one, so a turn is one trace across supervisor and agents.
+        trace_id = incoming_trace_id.get() or None
+        if trace_id:
+            trace_id_var.set(trace_id)
+        config: RunnableConfig = build_langfuse_config(
+            customer_id, thread_id, f"a2a-{agent}", extra_tags=[f"a2a-{agent}"], trace_id=trace_id
+        )
         # buffer: tokens not yet sent. streamed: any answer chunk already sent. final_text: fallback reply
         # taken from the finished graph state when no tokens were streamed.
         buffer, streamed, final_text = "", False, ""
+        final_messages: list[AnyMessage] = []  # full message list of the finished run, for tool-call scoring
+        run_start = time.perf_counter()
         try:
             for mode, data in graph.stream({"messages": messages}, config, stream_mode=["messages", "updates", "values"]):
                 if mode == "messages":
@@ -127,11 +150,13 @@ def graph_runner(
                             yield progress(labels[node])
                 else:
                     final_text = data["messages"][-1].text
+                    final_messages = data["messages"]
             if buffer:
                 yield answer(buffer)
                 streamed = True
             if not streamed:
                 yield answer(final_text)
+            _score_run(agent, config, final_messages[len(messages):], time.perf_counter() - run_start)
         finally:
             # Each request is its own short trace; send it before replying so it is not lost on shutdown.
             get_client().flush()
@@ -183,6 +208,7 @@ class RunnerExecutor(AgentExecutor):
         history = data[0].get("history", []) if data else []
         customer_id = context.metadata.get("customer_id", "")
         thread_id = context.metadata.get("thread_id", context_id)
+        trace_id = context.metadata.get(TRACE_ID_METADATA_KEY, "")
         if auth_enabled():
             # Never trust the claimed customer_id on its own: replace it with the one proven by the token.
             verified = await self._verify_customer(context, customer_id, task_id)
@@ -200,6 +226,7 @@ class RunnerExecutor(AgentExecutor):
 
         def produce() -> None:
             """Worker thread: iterate the runner and hand each chunk to the event loop."""
+            incoming_trace_id.set(trace_id)  # read by the runner to join the supervisor's trace
             try:
                 for chunk in self._runner(text, history, customer_id, thread_id):
                     loop.call_soon_threadsafe(outbox.put_nowait, chunk)
