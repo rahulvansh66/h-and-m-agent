@@ -12,6 +12,7 @@ from langchain.agents import create_agent
 from langgraph.graph.state import CompiledStateGraph
 
 from hm_agent.core.llm import load_model
+from hm_agent.core.prompts import get_managed_prompt
 from hm_agent.order_management.mcp_client import load_order_tools
 from hm_agent.core.state import ORDER_MANAGEMENT
 
@@ -39,6 +40,9 @@ Answer the customer's question about their order history by calling the availabl
 A short, friendly plain-text reply (1-3 sentences) addressed to the customer.
 """
 
+# Langfuse prompt name (text prompt); ORDER_MANAGEMENT_PROMPT above is the in-code fallback.
+ORDER_MANAGEMENT_PROMPT_NAME = "hm/order-management-system"
+
 
 def build_order_agent() -> CompiledStateGraph:
     """Create the order management ReAct agent (a compiled subgraph).
@@ -52,6 +56,6 @@ def build_order_agent() -> CompiledStateGraph:
     return create_agent(
         load_model("small"),
         tools=load_order_tools(),
-        system_prompt=ORDER_MANAGEMENT_PROMPT,
+        system_prompt=get_managed_prompt(ORDER_MANAGEMENT_PROMPT_NAME, ORDER_MANAGEMENT_PROMPT, kind="text").compile(),
         name=ORDER_MANAGEMENT,
     )

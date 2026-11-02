@@ -8,6 +8,7 @@ No LLM or agent service is called.
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import Runnable
 from langgraph.checkpoint.memory import InMemorySaver
 
 from hm_agent import graph as graph_module
@@ -18,7 +19,7 @@ from hm_agent.supervisor.split_stream import LEAD_INS
 SOURCES = "\n\nSources:\n[1] Returns policy"
 
 
-class FakeModel:
+class FakeModel(Runnable):
     """Stand-in chat model that streams canned chunks (or fails) and counts calls."""
 
     def __init__(self, chunks: list[str] | Exception, fail_after: int | None = None) -> None:
@@ -30,11 +31,16 @@ class FakeModel:
         """
         self.chunks, self.fail_after, self.calls = chunks, fail_after, 0
 
-    def stream(self, _messages: list):
+    def invoke(self, _input, config=None, **_kwargs):
+        """Not used: the synthesis node only streams."""
+        raise NotImplementedError
+
+    def stream(self, _input, config=None, **_kwargs):
         """Yield the canned chunks as AI messages, or raise.
 
         Args:
-            _messages (list): Prompt messages (unused).
+            _input: Rendered prompt (unused).
+            config: Run config (unused).
 
         Yields:
             AIMessage: One chunk.

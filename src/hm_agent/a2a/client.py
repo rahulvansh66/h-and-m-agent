@@ -36,6 +36,7 @@ from a2a.types.a2a_pb2 import (
 from hm_agent.a2a.sigv4 import request_auth
 from hm_agent.a2a.wire_log import wire_log_hooks
 from hm_agent.auth import USER_TOKEN_METADATA_KEY
+from hm_agent.core.tracing import TRACE_ID_METADATA_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +85,14 @@ def task_reply(task: Task) -> str:
     return "\n".join(get_artifact_text(a, delimiter="") for a in task.artifacts)
 
 
-def _request_metadata(customer_id: str, thread_id: str, user_token: str) -> dict[str, str]:
+def _request_metadata(customer_id: str, thread_id: str, user_token: str, trace_id: str = "") -> dict[str, str]:
     """Build the A2A request metadata carrying the customer, thread and (when present) the user token.
 
     Args:
         customer_id (str): Customer the conversation belongs to.
         thread_id (str): Conversation thread id.
         user_token (str): End user's access token; omitted from the metadata when empty.
+        trace_id (str): Langfuse trace id of the supervisor turn, so the agent joins the same trace; omitted when empty.
 
     Returns:
         dict[str, str]: Metadata for ``SendMessageRequest``. The token must never be logged.
@@ -98,6 +100,8 @@ def _request_metadata(customer_id: str, thread_id: str, user_token: str) -> dict
     metadata = {"customer_id": customer_id, "thread_id": thread_id}
     if user_token:
         metadata[USER_TOKEN_METADATA_KEY] = user_token
+    if trace_id:
+        metadata[TRACE_ID_METADATA_KEY] = trace_id
     return metadata
 
 
@@ -110,6 +114,7 @@ async def _send(
     timeout_s: float,
     push: PushTarget | None,
     user_token: str = "",
+    trace_id: str = "",
 ) -> RemoteResult:
     """Send one message to an agent (async implementation).
 
@@ -123,6 +128,7 @@ async def _send(
         push (PushTarget | None): Webhook to register. Used only if the agent's card advertises
             push notifications; otherwise the call blocks.
         user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
+        trace_id (str): Langfuse trace id of the supervisor turn, sent as request metadata so the agent joins that trace. Empty to omit.
 
     Returns:
         RemoteResult: The reply (blocking call) or the pending task id (push call).
@@ -151,7 +157,7 @@ async def _send(
                 parts=[new_text_part(text), new_data_part({"history": history})],
             ),
             configuration=configuration,
-            metadata=_request_metadata(customer_id, thread_id, user_token),
+            metadata=_request_metadata(customer_id, thread_id, user_token, trace_id),
         )
         # send_message yields a stream of responses even in non-streaming mode; the last Task seen is the result.
         task = None
@@ -180,6 +186,7 @@ def call_remote_agent(
     timeout_s: float,
     push: PushTarget | None = None,
     user_token: str = "",
+    trace_id: str = "",
 ) -> RemoteResult:
     """Send one message to a remote A2A agent (blocking until the agent answers the request).
 
@@ -193,6 +200,7 @@ def call_remote_agent(
         push (PushTarget | None): Webhook for push notifications; ignored by agents that do not
             advertise the capability.
         user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
+        trace_id (str): Langfuse trace id of the supervisor turn, sent as request metadata so the agent joins that trace. Empty to omit.
 
     Returns:
         RemoteResult: ``reply`` set for a normal call, ``pending=True`` when the result will be pushed.
@@ -201,7 +209,7 @@ def call_remote_agent(
         RuntimeError: If the task does not complete (blocking call) or no task comes back.
         httpx.HTTPError: If the agent cannot be reached or times out.
     """
-    return asyncio.run(_send(url, text, history, customer_id, thread_id, timeout_s, push, user_token))
+    return asyncio.run(_send(url, text, history, customer_id, thread_id, timeout_s, push, user_token, trace_id))
 
 
 async def fetch_task(url: str, task_id: str, timeout_s: float) -> Task:
@@ -270,6 +278,7 @@ async def _stream(
     timeout_s: float,
     push: PushTarget | None,
     user_token: str = "",
+    trace_id: str = "",
 ) -> AsyncIterator[RemoteEvent]:
     """Send one message with streaming and yield the agent's events (async implementation).
 
@@ -282,6 +291,7 @@ async def _stream(
         timeout_s (float): HTTP timeout in seconds (also the longest silence tolerated on the stream).
         push (PushTarget | None): Webhook to register as a fallback; used only if the card advertises push.
         user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
+        trace_id (str): Langfuse trace id of the supervisor turn, sent as request metadata so the agent joins that trace. Empty to omit.
 
     Yields:
         RemoteEvent: ``started`` first, then ``progress`` / ``answer`` events and a final ``state``.
@@ -308,7 +318,7 @@ async def _stream(
                 parts=[new_text_part(text), new_data_part({"history": history})],
             ),
             configuration=configuration,
-            metadata=_request_metadata(customer_id, thread_id, user_token),
+            metadata=_request_metadata(customer_id, thread_id, user_token, trace_id),
         )
         # Translate the protocol's response union into our small RemoteEvent vocabulary.
         async for response in client.send_message(request):
@@ -337,6 +347,7 @@ def stream_remote_agent(
     timeout_s: float,
     push: PushTarget | None = None,
     user_token: str = "",
+    trace_id: str = "",
 ) -> Iterator[RemoteEvent]:
     """Send one message to a remote A2A agent and yield its events as they arrive (blocking iterator).
 
@@ -352,6 +363,7 @@ def stream_remote_agent(
         push (PushTarget | None): Webhook for push notifications, used as a fallback if the stream
             breaks; ignored by agents that do not advertise the capability.
         user_token (str): End user's access token, sent as request metadata so the agent can verify it. Empty to omit.
+        trace_id (str): Langfuse trace id of the supervisor turn, sent as request metadata so the agent joins that trace. Empty to omit.
 
     Yields:
         RemoteEvent: Events in the order the agent produced them.
@@ -361,7 +373,7 @@ def stream_remote_agent(
     """
     # A private loop (not asyncio.run) so one async generator can be advanced step by step between yields.
     loop = asyncio.new_event_loop()
-    events = _stream(url, text, history, customer_id, thread_id, timeout_s, push, user_token)
+    events = _stream(url, text, history, customer_id, thread_id, timeout_s, push, user_token, trace_id)
     try:
         while True:
             try:

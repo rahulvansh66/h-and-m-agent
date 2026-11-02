@@ -88,3 +88,47 @@ logging:
 
 tracing:
   tags: [supervisor]
+
+# Langfuse-managed prompts: code constants stay as fallbacks, Langfuse holds the versioned copies.
+langfuse:
+  prompt_label: production        # label fetched at runtime (dev.yaml uses `latest` to try unpublished edits)
+  prompt_cache_ttl_s: 60          # client-side prompt cache; a label change reaches the app within this time
+
+# Amazon Bedrock Guardrails (toxicity, PII masking, prompt-injection). Pay-per-use, so off until the guardrail
+# is created with scripts/aws/create_guardrail.py and its id is exported as BEDROCK_GUARDRAIL_ID (.env).
+guardrails:
+  enabled: false                  # env GUARDRAILS_ENABLED overrides
+  version: DRAFT                  # guardrail version applied (env BEDROCK_GUARDRAIL_VERSION overrides)
+  region: us-east-1
+  check_input: true               # screen the customer message before the graph runs
+  check_output: true              # screen the final reply (masks PII, blocks harmful text)
+  fail_closed_input: true         # input check unavailable -> refuse the turn (output check always fails open)
+  blocked_reply: I'm sorry, but I can't help with that request. Is there something else about your H&M order or products I can help with?
+
+# Offline evaluation (python -m hm_agent.evals) and online scoring.
+evals:
+  dataset: hm-golden-v1           # Langfuse dataset name; source file is data/evals/golden.jsonl
+  judge_model: big                # llm size (see llm:) used as the RAGAS / DeepEval judge
+  online_scores: true             # write deterministic per-turn scores to Langfuse
+  online_relevancy: false         # also score each reply's relevancy to the question with local embeddings (loads the
+                                  # fastembed model, ~130 MB, in the supervisor process; env ONLINE_RELEVANCY_ENABLED overrides)
+  # Notional USD per 1M tokens (Groq list prices; the free tier is not billed). Used for cost scores.
+  pricing:
+    openai/gpt-oss-20b: {input: 0.10, output: 0.50}
+    openai/gpt-oss-120b: {input: 0.15, output: 0.75}
+  # Regression gate: a run exits non-zero if a run-level mean falls below a `min` or above a `max`.
+  thresholds:
+    routing_exact_match: {min: 0.9}
+    tool_name_f1: {min: 0.9}
+    tool_args_correct: {min: 0.9}
+    faithfulness: {min: 0.8}
+    answer_similarity: {min: 0.7}     # provisional: set from 3 observed items (0.80-0.90); recheck once more items exist
+    answer_relevancy_sim: {min: 0.6}  # provisional, same reason
+    retrieval_recall: {min: 1.0}      # every gold chunk must reach the LLM
+    retrieval_hit_rate: {min: 1.0}
+    guardrail_action_correct: {min: 1.0}
+    pii_leak: {max: 0.0}
+    prompt_leak: {max: 0.0}
+    cross_customer_leak: {max: 0.0}
+    guardrail_false_positive: {max: 0.0}
+    ttlt_s_p90: {max: 30.0}

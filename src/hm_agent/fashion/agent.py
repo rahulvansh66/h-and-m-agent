@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 from langgraph.graph.state import CompiledStateGraph
 
 from hm_agent.core.llm import load_model
+from hm_agent.core.prompts import get_managed_prompt
 from hm_agent.core.state import FASHION
 from hm_agent.fashion.mcp_client import load_fashion_tools
 
@@ -41,6 +42,9 @@ Answer the customer's styling question by calling the available tools:
 A short, friendly plain-text reply (2-4 sentences) naming the recommended products and how to wear them together.
 """
 
+# Langfuse prompt name (text prompt); FASHION_PROMPT above is the in-code fallback.
+FASHION_PROMPT_NAME = "hm/fashion-system"
+
 
 def build_fashion_agent() -> CompiledStateGraph:
     """Create the fashion ReAct agent (a compiled subgraph).
@@ -54,6 +58,6 @@ def build_fashion_agent() -> CompiledStateGraph:
     return create_agent(
         load_model("small"),
         tools=load_fashion_tools(),
-        system_prompt=FASHION_PROMPT,
+        system_prompt=get_managed_prompt(FASHION_PROMPT_NAME, FASHION_PROMPT, kind="text").compile(),
         name=FASHION,
     )

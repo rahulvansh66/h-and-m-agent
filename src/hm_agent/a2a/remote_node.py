@@ -24,6 +24,7 @@ from hm_agent.a2a.client import stream_remote_agent
 from hm_agent.a2a.push_receiver import COMPLETED_STATE, PendingTask, get_receiver
 from hm_agent.auth import USER_TOKEN_CONFIG_KEY
 from hm_agent.core.settings import A2A_HISTORY, A2A_TIMEOUT_S, SUPERVISOR_BRANCH_TIMEOUT_S, agent_url
+from hm_agent.core.tracing import TRACE_ID_CONFIG_KEY
 from hm_agent.core.state import AgentResult, BranchInput
 from hm_agent.supervisor.split_stream import get_split_stream
 
@@ -67,6 +68,7 @@ def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig]
         configurable = config.get("configurable", {})
         customer_id, thread_id = configurable.get("customer_id", ""), configurable.get("thread_id", "")
         user_token = configurable.get(USER_TOKEN_CONFIG_KEY, "")  # lets the agent verify the user; never logged
+        trace_id = configurable.get(TRACE_ID_CONFIG_KEY, "")  # the agent attaches its spans to the turn's trace
         messages = state["messages"]
         sub_query = state.get("query")  # set only when the message was split between several agents
         latest = sub_query or messages[-1].text
@@ -97,6 +99,7 @@ def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig]
                 timeout,
                 push=receiver.target if receiver else None,
                 user_token=user_token,
+                trace_id=trace_id,
             )
             for event in events:
                 if event.kind == "started":

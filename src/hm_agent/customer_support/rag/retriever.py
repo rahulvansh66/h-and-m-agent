@@ -21,7 +21,9 @@ def retrieve(query: str, top_k: int = RAG_TOP_K) -> list[dict]:
 
     Returns:
         list[dict]: Chunks ordered by similarity, each with ``text``, ``doc_title``,
-        ``source_file``, ``page`` and ``score``. Empty if nothing matched.
+        ``source_file``, ``page`` and ``score``, plus ``chunk_id`` (``source_file|p<page>|<kind>|<chunk_index>``,
+        unique and stable across runs, used to compare retrieval with the golden set's expected chunks).
+        Empty if nothing matched.
     """
     vector = next(iter(get_embedder(RAG_EMBEDDING).query_embed(query))).tolist()
     hits = get_client().query_points(
@@ -34,6 +36,10 @@ def retrieve(query: str, top_k: int = RAG_TOP_K) -> list[dict]:
             "source_file": h.payload.get("source_file", ""),
             "page": h.payload.get("page", ""),
             "score": h.score,
+            "chunk_id": "{}|p{}|{}|{}".format(
+                h.payload.get("source_file", ""), h.payload.get("page", ""),
+                h.payload.get("kind", ""), h.payload.get("chunk_index", ""),
+            ),
         }
         for h in hits
     ]

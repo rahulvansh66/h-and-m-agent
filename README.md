@@ -1,26 +1,71 @@
-# H&M Fashion Assistant
+# H&M Assistant
 
 A multi-agent assistant for H&M, built with LangGraph. A supervisor reads each
 message and routes it to one of four sub-agents. The agents
 run as separate A2A services, and an AgentCore-style entrypoint exposes the assistant over HTTP with streaming.
 
-```
-START -> supervisor -> order_management  -> END   (own orders and purchases, via MCP SQL tools)
-                    -> customer_support  -> END   (agentic RAG over the support knowledge base)
-                    -> shipment_tracking -> END   (carrier lookup; slow, streams progress, push fallback)
-                    -> fashion           -> END   (outfit and similar-product advice from catalog search)
-                    -> out_of_scope      -> END
+```mermaid
+flowchart LR
+    U([Customer]) --> R[Runtime entrypoint<br/>/invocations]
+    R --> G[Guardrails]
+    G --> S{Supervisor}
+    S -->|A2A| O[order_management<br/>MCP SQL tools]
+    S -->|A2A| C[customer_support<br/>agentic RAG]
+    S -->|A2A| T[shipment_tracking<br/>carrier lookup]
+    S -->|A2A| F[fashion<br/>MCP product search]
+    S --> X[out_of_scope]
+    O --> M[synthesize / stream]
+    C --> M
+    T --> M
+    F --> M
+    X --> M
+    DB[(Neon Postgres)]
+    Q[(Qdrant)]
 ```
 
-| Component | What it does |
+## Tech stack
+
+| Area | Technology |
 |---|---|
-| `supervisor` | Classifies the latest message (with a short history window) and picks the agent. A message that mixes topics (e.g. order status plus outfit advice) fans out to up to two agents in parallel, each with its own sub-question. Their answers stream as sections, one at a time, as soon as the first agent answers (no merge model, so a low time to first token); a failed or pending part gets a plain note, and one combined message is saved to the history. A model composes the answer only when the planner flags that the parts depend on each other (`needs_combination`). Short follow-ups ("how long does it take?") stay with the previous agent without an LLM call (`supervisor.max_agents`, `supervisor.branch_timeout_s`, `supervisor.synthesis_model`, `supervisor.sticky_max_words`). |
-| `order_management` | ReAct agent over read-only tools served by an MCP server on the Neon `order_management` schema. The `customer_id` is injected from the run config, so the model never chooses whose data is read. |
-| `customer_support` | Condense query -> retrieve from Qdrant -> answer with citations (retries once if no citation). |
-| `shipment_tracking` | Finds the order id (`ORD-1007`) in the conversation and runs a deliberately slow dummy carrier lookup. It streams progress lines, and its Agent Card advertises push notifications. It makes no LLM calls. |
-| `fashion` | ReAct agent that recommends products and outfits. Its tools come from a fashion MCP server: semantic product search over a Qdrant collection built from `product_catalog`, purchase history, a short styling guide and the customer's style profile. It recommends only products the tools return. |
-| Checkpointer | `PostgresSaver` on Neon (schema `checkpoints`) stores conversation state per `thread_id`. |
-| Tracing | Langfuse; every turn is a trace, all turns of a thread form one Langfuse session. |
+| Orchestration | LangGraph, LangChain |
+| LLM | Groq (`openai/gpt-oss-20b`, `openai/gpt-oss-120b`) |
+| Agent protocols | A2A (`a2a-sdk`), MCP (`mcp`, `langchain-mcp-adapters`) |
+| Runtime | AWS Bedrock AgentCore SDK, Uvicorn, Docker |
+| Database and checkpointer | Neon Postgres (`psycopg`, `PostgresSaver`) |
+| Vector store and embeddings | Qdrant, `fastembed` (`BAAI/bge-small-en-v1.5`) |
+| Auth | Auth0 (JWT), optional SigV4 for agent calls |
+| Guardrails | Amazon Bedrock Guardrails |
+| Tracing and prompts | Langfuse |
+| Evaluation | RAGAS, DeepEval, deterministic metrics |
+| Logging | Python `logging`, optional CloudWatch (`watchtower`) |
+| Tooling | Python 3.11+, uv, pytest |
+
+
+## Project layout
+
+```
+src/hm_agent/
+  cli.py            CLI entry point (single query and chat loop)
+  graph.py          Supervisor graph assembly
+  turns.py          One-message turn logic shared by the CLI and the runtime entrypoint
+  runtime/          AgentCore entrypoint (/invocations, /ping) and thread ownership/history helpers
+  auth/             Auth0 JWT verification and a standalone login app
+  core/             Shared config, LLM factory, logging, tracing, prompt defaults, db and graph state
+  prompt_registry.py Loads versioned prompts from Langfuse, falling back to the code constants
+  guardrails/       Bedrock Guardrails client (input and output screening)
+  evals/            Offline / Online evaluation
+  supervisor/       Route to sub-queries
+  order_management/ Agent, MCP server and client (injects customer_id), A2A service
+  customer_support/ Agent, RAG pipeline (rag/), A2A service
+  shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service
+  fashion/          Agent, MCP server and client (product search, styling guides), A2A service
+  a2a/              A2A server, client, cards, stream chunks, push receiver and supervisor remote node
+tests/              Unit and entrypoint tests (fakes, no live services)
+data/evals/         golden.jsonl, the 10-item golden evaluation set
+config/             base.yaml, dev.yaml
+scripts/            Userful scripts for creating langfuse, ingestion, guardrail
+DOCS/               Code documentation
+```
 
 ## Setup
 
@@ -37,7 +82,8 @@ cp .env.example .env        # then fill in the values
 | `NEON_POSTGRES_CONNECTION_STRING` | Order data and the conversation checkpointer |
 | `NEON_POSTGRES_TEST_CONNECTION_STRING` | Separate test database (`neondb_test`); tests never use the main DSN |
 | `QDRANT_ENDPOINT`, `QDRANT_API_KEY` | Vector store for the support knowledge base |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Tracing |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Tracing, prompt registry and evaluation |
+| `GUARDRAILS_ENABLED`, `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION` | Optional Bedrock guardrail (off by default) |
 
 Seed the database (one schema per agent; `--reset` rebuilds, `--test` targets the test database):
 
@@ -46,7 +92,7 @@ uv run python scripts/neon-db-creation/init_neon.py
 ```
 
 The support agent expects a Qdrant collection named `troubleshooting_kb` (see `config/base.yaml`),
-embedded with `BAAI/bge-small-en-v1.5`. This repo does not yet include an ingestion script for it.
+embedded with `BAAI/bge-small-en-v1.5`.
 
 The fashion agent searches a second collection, `product_catalog`, built from the Neon `product_catalog`
 table (recreated on every run):
@@ -66,8 +112,7 @@ uv run python scripts/a2a/run_agents.py
 
 This starts the fashion MCP server (port 8005, so its embedding model loads once) and the order management,
 customer support, shipment tracking and fashion services (ports 8001 to 8004). The push-notification receiver
-on 8010 is run by the supervisor side. How it works and real session
-walkthroughs: `DOCS/working-info/a2a/` (`basics/`, `streaming/`, `push-notifications/`).
+on 8010 is run by the supervisor side. H
 
 Agent replies stream end to end: runners yield chunks, the A2A server sends them as progress and
 artifact updates, and the supervisor forwards them to the caller. For slow tasks, if the stream breaks,
@@ -145,6 +190,34 @@ Tests use fakes for the graph, the LLM and Neon, so they make no Groq calls:
 uv run pytest
 ```
 
+## Prompts, evaluation and monitoring (Langfuse)
+
+Prompts are versioned in Langfuse (`hm/<role>`; the code constants are the fallback), every turn is one trace
+across supervisor and agents with online scores (latency, tools, safety, cost), and a 10-item golden set is
+evaluated offline with deterministic metrics, RAGAS and DeepEval.
+
+```bash
+uv run python scripts/langfuse/sync_prompts.py          # push prompt defaults (idempotent)
+uv run python scripts/langfuse/sync_dataset.py          # upload data/evals/golden.jsonl
+uv run --group evals python -m hm_agent.evals --metrics det --limit 3   # cheap smoke run, no judge calls
+```
+
+## Guardrails (Amazon Bedrock)
+
+An optional guardrail screens the customer message before the graph runs and the final reply before it is
+returned: toxicity, prompt-injection attempts, PII masking (email, phone, address) and blocked card numbers.
+It uses the model-independent `ApplyGuardrail` API, so cost is per screened text unit and there is no running
+cost. It is off by default (`guardrails.enabled: false` in `config/base.yaml`). A blocked input is refused with
+`guardrails.blocked_reply`; if the input check is unavailable the turn is refused (`fail_closed_input`), while
+the output check always fails open. Only category names and counts are logged, never the text.
+
+To turn it on, after local tests pass:
+
+```bash
+uv run python scripts/aws/create_guardrail.py     # prints the guardrail id
+# then set BEDROCK_GUARDRAIL_ID in .env and GUARDRAILS_ENABLED=true
+```
+
 ## Configuration
 
 Layered YAML in `config/`: `base.yaml` holds the defaults and `dev.yaml` is merged over it
@@ -158,30 +231,7 @@ and tracing tags live there, not in code.
 
 Secrets never go in the YAML files; they live in `.env`.
 
-## Project layout
-
-```
-src/hm_agent/
-  cli.py            CLI entry point (single query and chat loop)
-  graph.py          Supervisor graph assembly
-  turns.py          One-message turn logic shared by the CLI and the runtime entrypoint
-  runtime/          AgentCore entrypoint (/invocations, /ping) and thread ownership/history helpers
-  auth/             Auth0 JWT verification and a standalone login app
-  core/             Shared config, settings, LLM factory, logging, db and graph state
-  supervisor/       Plans each request (one or more specialist agents, sub-queries, sticky follow-ups) and streams split-turn answers section by section
-  order_management/ Agent, MCP server and client (injects customer_id), A2A service
-  customer_support/ Agent, RAG pipeline (rag/), A2A service
-  shipment_tracking/ Dummy carrier lookup agent (streams progress, push notifications), A2A service
-  fashion/          Agent, MCP server and client (product search, styling guides), A2A service
-  a2a/              Generic A2A server, client, cards, stream chunks, push receiver and supervisor remote node
-tests/              Unit and entrypoint tests (fakes, no live services)
-config/             base.yaml, dev.yaml
-scripts/            Database creation and query scripts, fashion/ingest_catalog.py, and a2a/run_agents.py (starts the agent services)
-DOCS/               Data documentation and code-reading guide
-```
-
 ## Notes
 
-- Groq is rate limited: keep LLM calls few and mock the LLM in tests.
 - Run and test locally before touching AWS, and keep any AWS resources minimal and pay-per-use.
 - Logs use `key=value` fields and never include secrets or customer data.

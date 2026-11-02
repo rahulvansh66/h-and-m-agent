@@ -9,6 +9,8 @@ they only use ``logging.getLogger(__name__)``.
 import logging
 import os
 import subprocess
+from contextvars import ContextVar
+from functools import cache
 
 import boto3
 import watchtower
@@ -18,10 +20,18 @@ from hm_agent.core.config import REPO_ROOT, load_config
 logger = logging.getLogger(__name__)
 
 # key=value fields (service/env/commit added by _ContextFilter) so CloudWatch Logs Insights can query them.
-LOG_FORMAT = "%(levelname)s service=%(service)s env=%(env)s commit=%(commit)s logger=%(name)s %(message)s"
+LOG_FORMAT = (
+    "%(levelname)s service=%(service)s env=%(env)s commit=%(commit)s trace_id=%(trace_id)s "
+    "logger=%(name)s %(message)s"
+)
+
+# Langfuse trace id of the turn being handled, so a log line can be joined to its trace. Set by the code that
+# starts a traced run (``hm_agent.turns`` / the A2A server); "-" when no trace is active.
+trace_id_var: ContextVar[str] = ContextVar("trace_id", default="-")
 
 
-def _git_commit() -> str:
+@cache
+def git_commit() -> str:
     """Return the short git commit hash of the checkout, or ``unknown`` if unavailable.
 
     Returns:
@@ -37,7 +47,7 @@ def _git_commit() -> str:
 
 
 class _ContextFilter(logging.Filter):
-    """Stamp every record with the service name, environment and git commit."""
+    """Stamp every record with the service name, environment, git commit and current trace id."""
 
     def __init__(self, service: str, env: str, commit: str) -> None:
         """Store the correlation fields.
@@ -61,6 +71,7 @@ class _ContextFilter(logging.Filter):
         """
         for key, value in self._fields.items():
             setattr(record, key, value)
+        record.trace_id = trace_id_var.get()  # changes per turn, so it is read per record
         return True
 
 
@@ -102,7 +113,7 @@ def configure_logging(service: str) -> None:
     """
     config = load_config()
     env = config["environment"]
-    context = _ContextFilter(service, env, _git_commit())
+    context = _ContextFilter(service, env, git_commit())
 
     handlers: list[logging.Handler] = [logging.StreamHandler()]  # stderr: MCP stdio uses stdout
     cw_cfg = config["logging"]["cloudwatch"]

@@ -4,15 +4,18 @@ Role in the system: checks ``hm_agent.supervisor.agent`` and the event mapping i
 without any LLM call; the routing model is replaced by a fake.
 """
 
+import httpx
 import pytest
+from groq import BadRequestError
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import Runnable
 
 from hm_agent import turns
 from hm_agent.core.state import AgentTask, SupervisorDecision
 from hm_agent.supervisor import agent as supervisor
 
 
-class FakeRouter:
+class FakeRouter(Runnable):
     """Stand-in for the structured-output routing model; counts how often it is called."""
 
     def __init__(self, decision: SupervisorDecision | None) -> None:
@@ -23,16 +26,19 @@ class FakeRouter:
         """
         self.decision, self.calls = decision, 0
 
-    def invoke(self, _messages: list) -> SupervisorDecision | None:
+    def invoke(self, _input, config=None, **_kwargs) -> SupervisorDecision | None:
         """Return the canned decision and count the call.
 
         Args:
-            _messages (list): Prompt messages (unused).
+            _input: Rendered prompt (unused).
+            config: Run config (unused).
 
         Returns:
             SupervisorDecision | None: The canned decision.
         """
         self.calls += 1
+        if isinstance(self.decision, Exception):
+            raise self.decision
         return self.decision
 
 
@@ -240,3 +246,30 @@ def test_turn_emits_one_agent_selected_per_task_streamed_sections_and_one_reply(
     ]
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("turn status=done"))
     assert "split=True" in line and "agents=2" in line and "ttft_s=" in line and "ttft_s=none" not in line
+
+
+def _groq_400(message: str) -> BadRequestError:
+    """Build a Groq 400 error the way the SDK raises it.
+
+    Args:
+        message (str): Error text.
+
+    Returns:
+        BadRequestError: A 400 error carrying ``message``.
+    """
+    response = httpx.Response(400, request=httpx.Request("POST", "https://api.groq.com/x"))
+    return BadRequestError(message, response=response, body={"error": {"code": "tool_use_failed"}})
+
+
+def test_model_refusal_routes_to_out_of_scope(router) -> None:
+    """A Groq tool_use_failed 400 (the model refused to call the decision tool) becomes an out-of-scope turn."""
+    router(_groq_400("Tool choice is required, but model did not call a tool (tool_use_failed)"))
+    update = supervisor.supervisor_node({"messages": [HumanMessage("you idiots")]})
+    assert [t.agent for t in update["tasks"]] == ["out_of_scope"]
+
+
+def test_other_groq_errors_still_raise(router) -> None:
+    """Only the refusal case is swallowed; a real API problem still fails the turn loudly."""
+    router(_groq_400("invalid api key"))
+    with pytest.raises(BadRequestError):
+        supervisor.supervisor_node({"messages": [HumanMessage("hello")]})

@@ -9,3 +9,9 @@ logging:
 
 tracing:
   tags: [dev, supervisor]
+
+evals:
+  online_relevancy: true
+
+langfuse:
+  prompt_label: latest            # dev runs the newest prompt version, so edits can be tried before promoting to production
