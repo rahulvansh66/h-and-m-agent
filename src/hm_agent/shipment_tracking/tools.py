@@ -6,10 +6,11 @@ is derived from the order id, so the same order always gets the same answer. The
 the agent a good fit for A2A push notifications: the customer does not hold a connection open.
 """
 
+import asyncio
 import hashlib
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 from hm_agent.a2a.chunks import Chunk, answer, progress
 from hm_agent.core.db import fetch_one
@@ -50,7 +51,8 @@ def order_belongs_to_customer(order_id: str, customer_id: str) -> bool:
     """
     if not customer_id:
         return False
-    # Filtering on both ids means another customer's order looks exactly like a missing one.
+
+    # SECURITY: filtering on both ids makes another customer's order look missing.
     row = fetch_one(
         "SELECT 1 FROM order_management.orders WHERE order_id = %s AND customer_id = %s",
         (order_id.upper(), customer_id),
@@ -67,9 +69,10 @@ def _build_status(order_id: str) -> str:
     Returns:
         str: Human-readable status with carrier, tracking number, last scan and delivery outlook.
     """
-    # Hash instead of random so the demo is repeatable: the same order id always gets the same carrier and tracking number.
+    # A hash, not random, so one order id always gives the same result.
     digest = hashlib.sha256(order_id.upper().encode()).hexdigest()
-    # First 8 hex chars pick the scenario; the next 10 form a 10-digit tracking number.
+
+    # First 8 hex chars pick the scenario; the next 10 make the tracking number.
     carrier, location, outlook = _SCENARIOS[int(digest[:8], 16) % len(_SCENARIOS)]
     tracking = f"{carrier.split()[0].upper()}{int(digest[8:18], 16) % 10**10:010d}"
     logger.info("tool=check_carrier_status status=complete order_id=%s carrier=%s", order_id, carrier)
@@ -97,7 +100,7 @@ def check_carrier_status(order_id: str, delay_s: float = SHIPMENT_CARRIER_DELAY_
     return _build_status(order_id)
 
 
-def stream_carrier_status(order_id: str, delay_s: float = SHIPMENT_CARRIER_DELAY_S) -> Iterator[Chunk]:
+async def stream_carrier_status(order_id: str, delay_s: float = SHIPMENT_CARRIER_DELAY_S) -> AsyncIterator[Chunk]:
     """Look up the shipping status like ``check_carrier_status``, reporting progress while waiting.
 
     The wait is split evenly across ``PROGRESS_STEPS``; each step yields a progress line before
@@ -113,5 +116,5 @@ def stream_carrier_status(order_id: str, delay_s: float = SHIPMENT_CARRIER_DELAY
     logger.info("tool=check_carrier_status status=start order_id=%s delay_s=%.1f", order_id, delay_s)
     for step in PROGRESS_STEPS:
         yield progress(step.format(order_id=order_id.upper()))
-        time.sleep(delay_s / len(PROGRESS_STEPS))
+        await asyncio.sleep(delay_s / len(PROGRESS_STEPS))
     yield answer(_build_status(order_id))

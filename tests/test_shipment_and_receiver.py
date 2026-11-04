@@ -5,21 +5,25 @@ progress chunks from the slow carrier lookup, order id extraction, and ignoring 
 notifications for tasks whose result already arrived over the stream.
 """
 
+import pytest
+
 from hm_agent.a2a.push_receiver import PushReceiver
 from hm_agent.shipment_tracking.agent import ASK_FOR_ORDER_REPLY, find_order_id, shipment_runner
 from hm_agent.shipment_tracking.tools import PROGRESS_STEPS, stream_carrier_status
 
 
-def test_carrier_lookup_streams_progress_then_answer() -> None:
+@pytest.mark.asyncio
+async def test_carrier_lookup_streams_progress_then_answer() -> None:
     """One progress line per step, then a single answer chunk naming the order."""
-    chunks = list(stream_carrier_status("ORD-1007", delay_s=0.04))
+    chunks = [c async for c in stream_carrier_status("ORD-1007", delay_s=0.04)]
     assert [c.kind for c in chunks] == ["progress"] * len(PROGRESS_STEPS) + ["answer"]
     assert "ORD-1007" in chunks[0].text and "ORD-1007" in chunks[-1].text
 
 
-def test_runner_asks_for_order_id_when_missing() -> None:
+@pytest.mark.asyncio
+async def test_runner_asks_for_order_id_when_missing() -> None:
     """Without an order id anywhere in the conversation the agent asks for one."""
-    chunks = list(shipment_runner("where is my parcel?", [], "cust001", "t1"))
+    chunks = [c async for c in shipment_runner("where is my parcel?", [], "cust001", "t1")]
     assert [(c.kind, c.text) for c in chunks] == [("answer", ASK_FOR_ORDER_REPLY)]
 
 

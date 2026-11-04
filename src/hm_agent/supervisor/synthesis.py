@@ -59,7 +59,7 @@ SYNTHESIS_CHAT_PROMPT = [
     {"role": "user", "content": "Customer message:\n{{question}}\n\nAgent answers:\n{{answers}}"},
 ]
 
-# Matches a trailing "Sources:" list (to the end of the text) so it can be cut off before composing.
+# Matches a trailing "Sources:" list, which is cut off before composing.
 _SOURCES_BLOCK = re.compile(r"\n\s*Sources?:\s*\n.*\Z", re.DOTALL | re.IGNORECASE)
 
 
@@ -73,7 +73,7 @@ def _citations_kept(answers: list[str], merged: str) -> bool:
     Returns:
         bool: True if no ``[n]`` marker from the answers is missing from ``merged``.
     """
-    # Subset check: the model may add nothing new, but must not drop a marker the agents wrote.
+    # The reply may repeat markers but must not drop any the agents wrote.
     wanted = set(re.findall(r"\[\d+\]", "\n".join(answers)))
     return wanted <= set(re.findall(r"\[\d+\]", merged))
 
@@ -129,9 +129,12 @@ def _stream_composition(question: str, done: list[AgentResult], stream: SplitStr
     if len(sources) > 1:
         logger.warning("node=synthesize status=compose_skipped reason=sources_clash")
         return False
-    # Tag each answer so the model treats it as data (the prompt tells it to ignore instructions inside).
+
+    # Tags mark each answer as data, which the prompt tells the model not to obey.
     answers = "\n".join(f'<agent_answer topic="{r.agent}">\n{body}\n</agent_answer>' for r, body, _ in parts)
-    shown = False  # flips on the first streamed token; decides whether a failure can still fall back
+
+    # Becomes True on the first streamed token; decides whether a failure can still fall back.
+    shown = False
     try:
         prompt = get_managed_prompt(SYNTHESIS_PROMPT_NAME, SYNTHESIS_CHAT_PROMPT, kind="chat")
         chain = prompt.chain(load_model(SUPERVISOR_SYNTHESIS_MODEL))
@@ -141,12 +144,18 @@ def _stream_composition(question: str, done: list[AgentResult], stream: SplitStr
                 shown = True
     except Exception:
         logger.exception("node=synthesize status=compose_failed shown=%s model=%s", shown, SUPERVISOR_SYNTHESIS_MODEL)
-        return shown  # nothing shown yet -> plain sections; part-way -> keep what the customer already read
+
+        # Nothing shown: fall back to plain sections. Part-way: keep what the customer read.
+        return shown
+
     if not shown:
         logger.warning("node=synthesize status=compose_empty")
         return False
+
+    # Already streamed, so a lost citation cannot be undone; at least make it visible.
     if not _citations_kept([body for _, body, _ in parts], stream.emitted_text()):
-        logger.warning("node=synthesize status=citation_lost")  # cannot be undone once streamed; make it visible
+        logger.warning("node=synthesize status=citation_lost")
+
     if sources:
         stream.emit_note(sources[0], writer)
     return True
@@ -172,34 +181,39 @@ def synthesize_node(state: AgentState, config: RunnableConfig | None = None) -> 
     """
     results: list[AgentResult] = state.get("results") or []
     if not results:
-        return {}  # single-agent turn: its reply is already in ``messages``
+        return {}
+
     start = time.perf_counter()
     writer = get_stream_writer()
     stream = pop_split_stream(state.get("turn_id", ""))
+
+    # Present answers in plan order, not in the order the agents finished.
     order = {t.agent: i for i, t in enumerate(state.get("tasks", []))}
-    results = sorted(results, key=lambda r: order.get(r.agent, len(order)))  # plan order, not finishing order
+    results = sorted(results, key=lambda r: order.get(r.agent, len(order)))
     done = [r for r in results if r.status == "complete"]
     missing = [r for r in results if r.status != "complete"]
 
-    # Two output modes: "sections" (default, no LLM) or "composed" (planner asked for reasoning across answers).
+    # "sections" is the default (no LLM); "composed" only when the planner asked for it.
     mode = "sections"
     if state.get("combine") and len(done) > 1:
-        # Latest customer message = the question the agents' sub-answers belong to.
         question = next(m.text for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
         if _stream_composition(question, done, stream, writer):
             mode = "composed"
+
+    # Branches already streamed their own sections live; emit only the ones not yet shown.
     if mode == "sections":
-        # Sections already streamed live by the branches are skipped; only the ones that were buffered/unseen go out.
         for r in done:
             if r.agent not in stream.streamed:
                 stream.emit_section(r.agent, r.text, writer)
+
+    # When everything failed, one apology reads better than one note per part.
     if not stream.emitted_text() and not done and all(r.status == "failed" for r in missing):
-        stream.emit_note(ALL_FAILED_REPLY, writer)  # nothing to show but a failure: one apology, not N notes
+        stream.emit_note(ALL_FAILED_REPLY, writer)
     else:
         for r in missing:
             stream.emit_note(_not_answered_note(r), writer)
 
-    # The saved history message is exactly what the customer saw, so a later turn sees the same text.
+    # Saved text must match what the customer saw, so later turns see the same history.
     text = stream.emitted_text()
     logger.info(
         "node=synthesize status=%s agents=%s complete=%d duration_s=%.2f",

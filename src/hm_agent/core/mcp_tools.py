@@ -5,16 +5,18 @@ are common to all of them:
 
 * the ``customer_id`` argument is hidden from the model's tool schema,
 * an interceptor overwrites it on every call with the id from the run config, and
-* async-only MCP tools get a sync entry point,
+* one MCP session is opened at service startup and reused by every tool call,
 
-so the LLM can never read another customer's data and the graph can run with plain ``invoke``.
+so the LLM can never read another customer's data and a tool call does not pay a connect + ``initialize``.
 """
 
-import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
+from langchain_mcp_adapters.tools import load_mcp_tools
 
 from hm_agent.core.settings import DEFAULT_CUSTOMER_ID, auth_enabled
 
@@ -47,7 +49,8 @@ async def inject_customer_id(
         if auth_enabled():
             raise PermissionError("no verified customer id in the run config")
         customer_id = DEFAULT_CUSTOMER_ID
-    # Put the trusted id last so it always wins over anything the model put in the arguments.
+
+    # SECURITY: the trusted id goes last, so it overrides anything the model sent.
     return await handler(request.override(args={**request.args, CUSTOMER_ID_ARG: customer_id}))
 
 
@@ -60,7 +63,7 @@ def hide_customer_id(tool: BaseTool) -> BaseTool:
     Returns:
         BaseTool: The same tool, with the argument no longer advertised to the model.
     """
-    # Copy first so the shared schema dict is not mutated; drop the arg from both properties and required.
+    # Copy first, so the shared schema is not mutated.
     schema = dict(tool.args_schema)
     schema["properties"] = {k: v for k, v in schema.get("properties", {}).items() if k != CUSTOMER_ID_ARG}
     schema["required"] = [name for name in schema.get("required", []) if name != CUSTOMER_ID_ARG]
@@ -68,25 +71,23 @@ def hide_customer_id(tool: BaseTool) -> BaseTool:
     return tool
 
 
-def make_sync(tool: BaseTool) -> BaseTool:
-    """Give an async-only MCP tool a sync entry point.
+@asynccontextmanager
+async def open_mcp_tools(client: MultiServerMCPClient, server_name: str) -> AsyncGenerator[list[BaseTool]]:
+    """Open one MCP session, load its tools bound to it, and close the session on exit.
 
-    The graph is run with ``invoke`` and a sync Postgres checkpointer, so tools must be callable
-    synchronously. LangGraph runs sync tools in worker threads, which have no running event loop,
-    so ``asyncio.run`` is safe there (and on Windows it uses the Proactor loop that the stdio
-    subprocess transport needs).
+    Tools from ``client.get_tools()`` open a new session for every call. Tools loaded from an open
+    session reuse it, so the connect and ``initialize`` cost is paid once. Enter this from the
+    service's lifespan so the session lives on the server's own event loop.
 
     Args:
-        tool: A tool loaded from MCP, which only defines a coroutine.
+        client (MultiServerMCPClient): Client configured with the server connection and interceptors.
+        server_name (str): Key of the server in the client configuration.
 
-    Returns:
-        BaseTool: The same tool with ``func`` set to run its coroutine to completion.
+    Yields:
+        list[BaseTool]: Async tools (``customer_id`` hidden) that share the one open session.
     """
-    coroutine = tool.coroutine
-
-    # ``runtime`` is injected by LangGraph and forwarded so interceptors can read the run config.
-    def run(runtime: object | None = None, **arguments: object) -> object:
-        return asyncio.run(coroutine(runtime=runtime, **arguments))
-
-    tool.func = run
-    return tool
+    async with client.session(server_name) as session:
+        tools = await load_mcp_tools(
+            session, tool_interceptors=client.tool_interceptors, server_name=server_name
+        )
+        yield [hide_customer_id(tool) for tool in tools]

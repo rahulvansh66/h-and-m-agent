@@ -121,12 +121,13 @@ def configure_logging(service: str) -> None:
     if cw_handler:
         handlers.append(cw_handler)
 
-    # Same filter + formatter on every handler so console and CloudWatch lines look identical.
+    # Same filter and format on every handler, so console and CloudWatch match.
     formatter = logging.Formatter(LOG_FORMAT)
     for handler in handlers:
         handler.addFilter(context)
         handler.setFormatter(formatter)
-    # force=True replaces handlers installed earlier (e.g. by an imported library), so setup is idempotent.
+
+    # force=True replaces earlier handlers, so calling this twice is safe.
     logging.basicConfig(level=config["logging"]["level"], handlers=handlers, force=True)
     if cw_handler:
         logger.info("component=cloudwatch status=enabled log_group=%s", cw_cfg["log_group"])

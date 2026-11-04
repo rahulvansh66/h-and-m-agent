@@ -9,11 +9,11 @@ so no custom ``StateGraph`` is needed.
 """
 
 from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from hm_agent.core.llm import load_model
 from hm_agent.core.prompts import get_managed_prompt
-from hm_agent.order_management.mcp_client import load_order_tools
 from hm_agent.core.state import ORDER_MANAGEMENT
 
 ORDER_MANAGEMENT_PROMPT = """\
@@ -44,18 +44,19 @@ A short, friendly plain-text reply (1-3 sentences) addressed to the customer.
 ORDER_MANAGEMENT_PROMPT_NAME = "hm/order-management-system"
 
 
-def build_order_agent() -> CompiledStateGraph:
+def build_order_agent(tools: list[BaseTool]) -> CompiledStateGraph:
     """Create the order management ReAct agent (a compiled subgraph).
 
-    The tools are loaded from the MCP server (blocking, once at build time) and exposed as
-    sync tools, so the agent runs with plain ``invoke``/``stream``.
+    Args:
+        tools (list[BaseTool]): Order MCP tools bound to an open session (see ``order_tools``). The agent
+            must be run with ``astream``/``ainvoke``, since the tools are async.
 
     Returns:
         CompiledStateGraph: Agent named ``order_management`` with the four MCP order tools.
     """
     return create_agent(
         load_model("small"),
-        tools=load_order_tools(),
+        tools=tools,
         system_prompt=get_managed_prompt(ORDER_MANAGEMENT_PROMPT_NAME, ORDER_MANAGEMENT_PROMPT, kind="text").compile(),
         name=ORDER_MANAGEMENT,
     )

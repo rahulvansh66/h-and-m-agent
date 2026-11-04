@@ -45,19 +45,23 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> CompiledStat
     """
     graph = StateGraph(AgentState)
     graph.add_node("supervisor", supervisor_node)
+
     # Local nodes (no A2A call): the decline reply and the split-turn closer.
     graph.add_node(OUT_OF_SCOPE, out_of_scope_node)
     graph.add_edge(OUT_OF_SCOPE, END)
     graph.add_node("synthesize", synthesize_node)
     graph.add_edge("synthesize", END)
-    # One node per remote agent, all built by the same factory (only the agent name differs).
+
+    # One node per remote agent, built by the same factory.
     for agent in REMOTE_AGENTS:
         # input_schema pins the node to the shared state; otherwise LangGraph would turn the BranchInput hint
         # into extra state channels (``query``) that nothing writes. The Send payload still arrives as sent.
         graph.add_node(agent, make_remote_agent_node(agent), input_schema=AgentState)
+
         # A single-agent turn ends here; a split turn goes on to close the turn in synthesize.
         graph.add_conditional_edges(agent, route_after_agent, {"synthesize": "synthesize", END: END})
     graph.add_edge(START, "supervisor")
-    # route_to_agent returns Send objects, so one or several agents run in parallel with no fixed target map.
+
+    # route_to_agent returns ``Send`` objects, so one or several agents run in parallel.
     graph.add_conditional_edges("supervisor", route_to_agent)
     return graph.compile(checkpointer=checkpointer)

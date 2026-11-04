@@ -138,13 +138,14 @@ async def _send(
         httpx.HTTPError: If the agent cannot be reached or times out.
     """
     async with httpx.AsyncClient(timeout=timeout_s, event_hooks=wire_log_hooks(), auth=request_auth()) as http:
-        # The Agent Card is the contract: it says whether the agent supports streaming and push notifications.
+        # The Agent Card says whether the agent supports streaming and push.
         card = await A2ACardResolver(http, url).get_agent_card()
         client = ClientFactory(ClientConfig(streaming=False, httpx_client=http)).create(card)
         use_push = push is not None and card.capabilities.push_notifications
         configuration = SendMessageConfiguration()
+
+        # Return the task at once; the agent keeps working and POSTs updates to the webhook.
         if use_push:
-            # Reply with the task right away; the agent keeps working and POSTs updates to the webhook.
             configuration = SendMessageConfiguration(
                 return_immediately=True,
                 task_push_notification_config=TaskPushNotificationConfig(url=push.url, token=push.token),
@@ -159,7 +160,8 @@ async def _send(
             configuration=configuration,
             metadata=_request_metadata(customer_id, thread_id, user_token, trace_id),
         )
-        # send_message yields a stream of responses even in non-streaming mode; the last Task seen is the result.
+
+        # Even without streaming, send_message yields responses; the last Task seen is the result.
         task = None
         async for response in client.send_message(request):
             if response.HasField("task"):
@@ -303,9 +305,9 @@ async def _stream(
         card = await A2ACardResolver(http, url).get_agent_card()
         client = ClientFactory(ClientConfig(streaming=card.capabilities.streaming, httpx_client=http)).create(card)
         use_push = push is not None and card.capabilities.push_notifications
-        # Unlike the push-only call there is no ``return_immediately``: the stream stays open while the
-        # webhook is registered as a second, independent route for the same updates.
         configuration = SendMessageConfiguration()
+
+        # No ``return_immediately`` here: the stream stays open and the webhook is a fallback route.
         if use_push:
             configuration = SendMessageConfiguration(
                 task_push_notification_config=TaskPushNotificationConfig(url=push.url, token=push.token)
@@ -320,20 +322,20 @@ async def _stream(
             configuration=configuration,
             metadata=_request_metadata(customer_id, thread_id, user_token, trace_id),
         )
-        # Translate the protocol's response union into our small RemoteEvent vocabulary.
+
+        # Map the protocol's response types onto our small RemoteEvent set.
         async for response in client.send_message(request):
             if response.HasField("task"):
-                # First message of a task: the Task object itself.
                 yield RemoteEvent("started", task_id=response.task.id, push_registered=use_push)
             elif response.HasField("status_update"):
                 status = response.status_update.status
+
+                # A working update that carries text is a progress line.
                 if status.state == TaskState.TASK_STATE_WORKING and status.message.parts:
-                    # A "working" update with text is a human-readable progress line.
                     yield RemoteEvent("progress", text=get_message_text(status.message))
                 elif status.state in _TERMINAL_STATES:
                     yield RemoteEvent("state", state=TaskState.Name(status.state))
             elif response.HasField("artifact_update"):
-                # Artifact appends carry the reply text in order; the caller joins them.
                 yield RemoteEvent("answer", text=get_artifact_text(response.artifact_update.artifact, delimiter=""))
         await client.close()
 
@@ -371,7 +373,7 @@ def stream_remote_agent(
     Raises:
         httpx.HTTPError: If the agent cannot be reached or the stream breaks mid-way.
     """
-    # A private loop (not asyncio.run) so one async generator can be advanced step by step between yields.
+    # Own loop (not asyncio.run) so the generator can be advanced one step per yield.
     loop = asyncio.new_event_loop()
     events = _stream(url, text, history, customer_id, thread_id, timeout_s, push, user_token, trace_id)
     try:
@@ -381,6 +383,6 @@ def stream_remote_agent(
             except StopAsyncIteration:
                 return
     finally:
-        # Always close the generator (releases the HTTP connection) even if the consumer stops early.
+        # Close even if the consumer stops early, to release the HTTP connection.
         loop.run_until_complete(events.aclose())
         loop.close()

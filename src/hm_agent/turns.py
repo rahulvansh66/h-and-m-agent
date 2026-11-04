@@ -179,8 +179,8 @@ def stream_turn(
     first_token_s: float | None = None  # time to first token (ttft), set once on the first "token" event
     agent_names: list[str] = []  # agents the supervisor picked; more than one means a split turn
     reply: dict | None = None  # the final reply event, held back until the output screening and scoring are done
-    # Two stream modes at once: "updates" gives per-node state changes (routing, final replies), "custom"
-    # gives the events the nodes write themselves (started / progress / token).
+
+    # "updates" = per-node state changes; "custom" = events the nodes write (started / progress / token).
     stream = graph.stream(
         {"messages": [HumanMessage(query)]},
         config,
@@ -192,6 +192,7 @@ def stream_turn(
                 first_token_s = time.perf_counter() - start
             yield data  # written by the remote-agent node: started / progress / token
             continue
+
         # "updates" payload: {node_name: state_update}.
         for node, update in data.items():
             if node == "supervisor":
@@ -211,6 +212,7 @@ def stream_turn(
             reply["text"] = guard_out.text
 
     total_s = time.perf_counter() - start
+
     # One line per turn, shaped for log-based metrics: alert on a high p95 of ttft_s, split-turn share, etc.
     logger.info(
         "turn status=done thread_id=%s split=%s agents=%d ttft_s=%s total_s=%.2f",
@@ -239,6 +241,7 @@ def stream_turn(
     )
     if reply is not None and reply["agent"] != "guardrail":
         publish_relevancy_async(trace_id, query, reply["text"])
+
     # The reply is yielded last, after scoring, because a consumer may stop reading once it has the reply.
     if reply is not None:
         yield reply

@@ -90,15 +90,15 @@ def condense_query_node(state: CustomerSupportState) -> dict:
     messages = state["messages"]
     latest = messages[-1].text
 
-    # The first customer message is already standalone.
+    # The first customer message is already standalone, so skip the LLM.
     if sum(isinstance(m, HumanMessage) for m in messages) <= 1:
         return {"query": latest}
 
-    # Only a recent window of the conversation is needed to resolve "it" / "that one".
+    # A recent window is enough to resolve "it" or "that one".
     history = "\n".join(f"{_role_label(m)}: {m.text}" for m in messages[-RAG_CONDENSE_HISTORY:])
     prompt = get_managed_prompt(CONDENSE_PROMPT_NAME, CONDENSE_CHAT_PROMPT, kind="chat")
     response = prompt.chain(load_model("small")).invoke({"history": history})
-    query = str(response.content).strip() or latest  # empty model output falls back to the raw message
+    query = str(response.content).strip() or latest  # empty output falls back to the raw message
     logger.info("node=condense_query status=complete history_messages=%d", len(messages))
     return {"query": query}
 
@@ -129,8 +129,8 @@ def build_customer_support_agent() -> CompiledStateGraph:
     """
     graph = StateGraph(CustomerSupportState)
     graph.add_node("condense_query", condense_query_node)
-    # The RAG graph shares only ``query`` / ``answer`` with this state, so its documents,
-    # claims and retry counter stay private to it.
+
+    # RAG shares only ``query`` and ``answer`` with this state; its other fields stay private.
     graph.add_node("rag", build_rag_graph())
     graph.add_node("respond", respond_node)
     

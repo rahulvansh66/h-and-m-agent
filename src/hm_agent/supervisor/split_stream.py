@@ -99,14 +99,16 @@ class SplitStream:
         with self._lock:
             section = self._sections.setdefault(agent, _Section())
             section.pending.append(text)
-            # Queue the agent once, in arrival order, unless it is already on screen.
+
+            # Queue each agent once, in the order it first produced text.
             if agent not in self._waiting and not section.shown:
                 self._waiting.append(agent)
+
+            # Free baton: take it. Our baton: show live. Otherwise the piece stays buffered.
             if self._baton is None:
-                self._advance(writer)  # nobody is streaming: the first producer takes the baton
+                self._advance(writer)
             elif self._baton == agent:
-                self._flush(agent, writer)  # we hold the baton: show the piece live
-            # otherwise the piece stays buffered until the baton reaches this agent
+                self._flush(agent, writer)
 
     def finish(self, agent: str, complete: bool, writer: Writer) -> None:
         """Mark a branch as done and pass the baton on if it held it.
@@ -122,16 +124,19 @@ class SplitStream:
         with self._lock:
             section = self._sections.setdefault(agent, _Section())
             section.finished, section.complete = True, complete
+
+            # Drop unshown text of a failed branch so a partial answer never appears as a section.
             if not complete and self._baton != agent:
-                # A failed, never-shown answer is dropped so partial text is not presented as a section.
                 section.pending.clear()
                 if agent in self._waiting:
                     self._waiting.remove(agent)
+
+            # Release our baton, or pick up a free one for a branch that was waiting.
             if self._baton == agent:
-                self._baton = None  # release the baton, then hand it to the next waiting branch
+                self._baton = None
                 self._advance(writer)
             elif self._baton is None:
-                self._advance(writer)  # a buffered branch may have been waiting for a free baton
+                self._advance(writer)
 
     def emit_section(self, agent: str, text: str, writer: Writer) -> None:
         """Show a whole section that was not streamed live (used by ``synthesize``).
@@ -187,8 +192,9 @@ class SplitStream:
         if not text:
             return
         if new_block and self._emitted:
-            text = SECTION_SEPARATOR + text  # blank line between blocks, but never before the first one
-        if self._first_token_s is None:  # time-to-first-token, reported by ``log_summary``
+            text = SECTION_SEPARATOR + text
+
+        if self._first_token_s is None:
             self._first_token_s = time.monotonic() - self._created
         self._emitted.append(text)
         writer({"type": "token", "agent": MULTI_AGENT, "text": text})
@@ -214,18 +220,24 @@ class SplitStream:
         while self._baton is None and self._waiting:
             agent = self._waiting.pop(0)
             section = self._sections[agent]
+
+            # Finished with nothing to show (e.g. failed): try the next waiting branch.
             if not section.pending and section.finished:
-                continue  # finished with nothing to show (e.g. failed): skip it, try the next waiting branch
+                continue
+
+            # The first start is not a hand-over, so it is not counted.
             if self._emitted:
-                self.baton_passes += 1  # only counts real hand-overs, not the very first start
+                self.baton_passes += 1
             section.shown = True
             self._emit(LEAD_INS.get(agent, "") + "\n", writer, new_block=True)
             self._flush(agent, writer)
+
+            # A branch that is still running keeps the baton and continues live.
             if not section.finished:
-                self._baton = agent  # still running: it continues live
+                self._baton = agent
 
 
-# Process-wide registry turn_id -> coordinator. Branches run on different threads, so access is locked.
+# Registry of turn_id -> coordinator; branches run on different threads, so it is locked.
 _TURNS: dict[str, SplitStream] = {}
 _TURNS_LOCK = threading.Lock()
 
@@ -240,7 +252,7 @@ def get_split_stream(turn_id: str) -> SplitStream:
         SplitStream: The shared coordinator. Stale entries of crashed turns are dropped on the way.
     """
     with _TURNS_LOCK:
-        # Opportunistic cleanup: sweep abandoned turns here instead of running a background reaper thread.
+        # Sweep abandoned turns here rather than running a background reaper thread.
         now = time.monotonic()
         for key in [k for k, v in _TURNS.items() if now - v.created_at > STALE_AFTER_S]:
             del _TURNS[key]

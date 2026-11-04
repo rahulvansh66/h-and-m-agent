@@ -67,17 +67,18 @@ def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig]
         """
         configurable = config.get("configurable", {})
         customer_id, thread_id = configurable.get("customer_id", ""), configurable.get("thread_id", "")
-        user_token = configurable.get(USER_TOKEN_CONFIG_KEY, "")  # lets the agent verify the user; never logged
-        trace_id = configurable.get(TRACE_ID_CONFIG_KEY, "")  # the agent attaches its spans to the turn's trace
+        user_token = configurable.get(USER_TOKEN_CONFIG_KEY, "")  # never logged
+        trace_id = configurable.get(TRACE_ID_CONFIG_KEY, "")
         messages = state["messages"]
-        sub_query = state.get("query")  # set only when the message was split between several agents
+        sub_query = state.get("query")  # set only on a split turn
         latest = sub_query or messages[-1].text
-        # On a split turn answer pieces go through the turn's coordinator, which shows one agent at a time;
-        # when the answer is to be composed (``combine``) the branch stays silent instead.
+
+        # On a split turn the shared coordinator orders the output; with ``combine`` the branch stays silent.
         turn_id = state.get("turn_id", "")
         split_stream = get_split_stream(turn_id) if sub_query and turn_id and not state.get("combine") else None
         timeout = SUPERVISOR_BRANCH_TIMEOUT_S if sub_query else A2A_TIMEOUT_S
-        # Prior turns only; the latest message travels separately as the text part.
+
+        # The latest message travels separately, so history holds prior turns only.
         history = [
             {"role": "user" if isinstance(m, HumanMessage) else "assistant", "text": m.text, "name": m.name}
             for m in messages[:-1][-A2A_HISTORY:]
@@ -85,8 +86,8 @@ def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig]
         writer = get_stream_writer()
         receiver = get_receiver()
         url = agent_url(agent)
-        # task_id/push_registered: filled on the "started" event. terminal: final task state, empty until the
-        # stream ends cleanly. pieces: answer fragments, joined into the reply at the end.
+
+        # ``terminal`` stays empty until the stream ends in a final task state.
         task_id, push_registered, terminal, pieces = "", False, "", []
         start = time.perf_counter()
         try:
@@ -109,31 +110,34 @@ def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig]
                     writer({"type": "progress", "agent": agent, "text": event.text})
                 elif event.kind == "answer":
                     pieces.append(event.text)
+
+                    # Split with ``combine`` matches neither branch: ``synthesize`` streams instead.
                     if split_stream is not None:
-                        split_stream.piece(agent, event.text, writer)  # split turn: coordinator orders the output
+                        split_stream.piece(agent, event.text, writer)
                     elif not sub_query:
-                        writer({"type": "token", "agent": agent, "text": event.text})  # single agent: stream directly
-                    # split turn with ``combine``: stay silent, synthesize streams the composed answer
+                        writer({"type": "token", "agent": agent, "text": event.text})
                 else:
                     terminal = event.state
-            # A stream that ends without a terminal state, or in failed/canceled/rejected, is an error; the
-            # handler below decides between the push fallback and the apology.
+
+            # No terminal state, or anything but completed, is handled by the except block below.
             if terminal != COMPLETED_STATE:
                 raise RuntimeError(f"task {task_id} ended in state {terminal or 'unknown'}")
             reply, status = "".join(pieces), "complete"
         except Exception:
-            # Broad catch on purpose: one broken agent must degrade to a message, not crash the whole turn.
+            # Broad catch on purpose: one broken agent must not crash the whole turn.
             if task_id and push_registered and not terminal and receiver is not None:
-                # Stream lost but the task may still be running: the webhook will report its result.
+                # The task may still be running; the webhook will report its result.
                 logger.warning("node=%s status=stream_lost thread_id=%s task_id=%s fallback=push", agent, thread_id, task_id)
                 receiver.register(PendingTask(task_id, agent, url, customer_id, thread_id))
                 reply, status = PENDING_REPLY, "pending"
             else:
                 logger.exception("node=%s status=remote_failed thread_id=%s", agent, thread_id)
                 reply, status = UNAVAILABLE_REPLY, "failed"
+
+        # The stream delivered the result, so later webhook notifications are duplicates.
         if task_id and push_registered and terminal and receiver is not None:
-            # The result came through the stream; ignore the webhook notifications that follow.
             receiver.mark_streamed(task_id)
+
         logger.info(
             "node=%s status=%s split=%s thread_id=%s duration_s=%.2f",
             agent,
@@ -143,9 +147,10 @@ def make_remote_agent_node(agent: str) -> Callable[[BranchInput, RunnableConfig]
             time.perf_counter() - start,
         )
         if split_stream is not None:
-            split_stream.finish(agent, status == "complete", writer)  # passes the baton on
+            split_stream.finish(agent, status == "complete", writer)
+
+        # A split turn hands its answer to ``synthesize`` instead of the conversation.
         if sub_query:
-            # Split turn: hand the answer to ``synthesize`` instead of adding it to the conversation.
             return {"results": [AgentResult(agent=agent, query=sub_query, status=status, text=reply)]}
         return {"messages": [AIMessage(reply, name=agent)]}
 

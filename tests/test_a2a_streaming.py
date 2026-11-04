@@ -18,7 +18,7 @@ from hm_agent.core.state import CUSTOMER_SUPPORT, FASHION, ORDER_MANAGEMENT, SHI
 AGENT_URL = "http://agent.test"
 
 
-def fake_runner(text: str, history: list[dict], customer_id: str, thread_id: str):
+async def fake_runner(text: str, history: list[dict], customer_id: str, thread_id: str):
     """Runner that reports one progress line and a two-piece answer that echoes its inputs.
 
     Args:
@@ -35,7 +35,7 @@ def fake_runner(text: str, history: list[dict], customer_id: str, thread_id: str
     yield answer(f"{customer_id}/{thread_id}")
 
 
-def failing_runner(text: str, history: list[dict], customer_id: str, thread_id: str):
+async def failing_runner(text: str, history: list[dict], customer_id: str, thread_id: str):
     """Runner that fails after one progress line.
 
     Args:

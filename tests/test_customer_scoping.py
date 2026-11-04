@@ -86,14 +86,21 @@ def test_shipment_order_gate(seeded) -> None:
     assert not order_belongs_to_customer(seeded["a_order"], "")
 
 
-def test_shipment_runner_refuses_other_customers_order(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_shipment_runner_refuses_other_customers_order(seeded, monkeypatch: pytest.MonkeyPatch) -> None:
     """Asking about someone else's order gets the generic reply and never reaches the carrier lookup."""
     called: list[str] = []
-    monkeypatch.setattr(shipment_agent, "stream_carrier_status", lambda order_id: called.append(order_id) or iter(()))
-    chunks = list(shipment_agent.shipment_runner(f"where is {seeded['b_order']}?", [], seeded["a"], "t1"))
+
+    async def fake_lookup(order_id: str):
+        called.append(order_id)
+        return
+        yield  # makes this an (empty) async generator
+
+    monkeypatch.setattr(shipment_agent, "stream_carrier_status", fake_lookup)
+    chunks = [c async for c in shipment_agent.shipment_runner(f"where is {seeded['b_order']}?", [], seeded["a"], "t1")]
     assert [c.text for c in chunks] == [shipment_agent.ORDER_NOT_FOUND_REPLY]
     assert called == []
-    list(shipment_agent.shipment_runner(f"where is {seeded['a_order']}?", [], seeded["a"], "t1"))
+    _ = [c async for c in shipment_agent.shipment_runner(f"where is {seeded['a_order']}?", [], seeded["a"], "t1")]
     assert called == [seeded["a_order"]]
 
 

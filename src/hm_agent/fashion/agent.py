@@ -8,12 +8,12 @@ returns a compiled graph that reads and writes ``messages``.
 """
 
 from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from hm_agent.core.llm import load_model
 from hm_agent.core.prompts import get_managed_prompt
 from hm_agent.core.state import FASHION
-from hm_agent.fashion.mcp_client import load_fashion_tools
 
 FASHION_PROMPT = """\
 # ROLE
@@ -46,18 +46,19 @@ A short, friendly plain-text reply (2-4 sentences) naming the recommended produc
 FASHION_PROMPT_NAME = "hm/fashion-system"
 
 
-def build_fashion_agent() -> CompiledStateGraph:
+def build_fashion_agent(tools: list[BaseTool]) -> CompiledStateGraph:
     """Create the fashion ReAct agent (a compiled subgraph).
 
-    The tools are loaded from the running fashion MCP server (blocking, once at build time) and exposed
-    as sync tools, so the agent runs with plain ``invoke``/``stream``.
+    Args:
+        tools (list[BaseTool]): Fashion MCP tools bound to an open session (see ``fashion_tools``). The agent
+            must be run with ``astream``/``ainvoke``, since the tools are async.
 
     Returns:
         CompiledStateGraph: Agent named ``fashion`` with the four MCP fashion tools.
     """
     return create_agent(
         load_model("small"),
-        tools=load_fashion_tools(),
+        tools=tools,
         system_prompt=get_managed_prompt(FASHION_PROMPT_NAME, FASHION_PROMPT, kind="text").compile(),
         name=FASHION,
     )

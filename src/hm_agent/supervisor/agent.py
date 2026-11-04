@@ -33,7 +33,6 @@ from hm_agent.core.state import (
 
 logger = logging.getLogger(__name__)
 
-# Fixed decline text: no LLM involved, so the wording is predictable and free.
 OUT_OF_SCOPE_REPLY = (
     "I can help with questions about your orders and purchases, where your parcel is, "
     "damaged or defective items, and outfit or product suggestions. "
@@ -84,7 +83,7 @@ shipment_tracking | fashion | out_of_scope, and `query`), `reason` (one short se
 `needs_combination` (true or false).
 """
 
-# Langfuse prompt name and in-code chat fallback (system prompt + the transcript as the user message).
+# Langfuse prompt name, plus the in-code fallback used when Langfuse is unavailable.
 SUPERVISOR_PROMPT_NAME = "hm/supervisor-router"
 SUPERVISOR_CHAT_PROMPT = [
     {"role": "system", "content": SUPERVISOR_PROMPT},
@@ -108,11 +107,12 @@ def _render_transcript(messages: list[AnyMessage]) -> str:
         str: One ``Speaker: text`` line per message, limited to the last ``SUPERVISOR_HISTORY``.
     """
     lines = []
-    for m in messages[-SUPERVISOR_HISTORY:]:  # only a recent window: keeps the routing prompt small and cheap
+
+    for m in messages[-SUPERVISOR_HISTORY:]:
         if isinstance(m, HumanMessage):
             lines.append(f"Customer: {m.text}")
         else:
-            # A merged multi-agent reply has no single author, so list every agent that contributed.
+            # A merged reply has no single author, so list every contributing agent.
             if m.name == MULTI_AGENT:
                 label = f"Assistant (multi: {', '.join(m.additional_kwargs.get('agents', []))})"
             else:
@@ -135,16 +135,19 @@ def _sticky_agent(messages: list[AnyMessage]) -> AgentName | None:
     Returns:
         AgentName | None: The agent that wrote the previous answer, or None to ask the LLM.
     """
-    # Disabled by config, no previous answer to stay with, or the last message is not from the customer.
     if SUPERVISOR_STICKY_MAX_WORDS <= 0 or len(messages) < 2 or not isinstance(messages[-1], HumanMessage):
         return None
+
+    # Only a real agent's answer can be followed up; declines and merged replies go to the model.
     previous = messages[-2]
     if not isinstance(previous, AIMessage) or previous.name not in SPECIALIST_AGENTS:
-        return None  # no label, a decline, or a merged multi-agent answer: let the model decide
-    # ``startswith`` accepts a tuple, so this matches any of the follow-up cues.
-    text = messages[-1].text.strip().lower()
-    if len(text.split()) >SUPERVISOR_STICKY_MAX_WORDS or not text.startswith(FOLLOW_UP_CUES):
         return None
+
+    # ``startswith`` accepts a tuple, so any one cue matches.
+    text = messages[-1].text.strip().lower()
+    if len(text.split()) > SUPERVISOR_STICKY_MAX_WORDS or not text.startswith(FOLLOW_UP_CUES):
+        return None
+
     return previous.name
 
 
@@ -161,16 +164,17 @@ def normalise_tasks(tasks: list[AgentTask]) -> list[AgentTask]:
     Returns:
         list[AgentTask]: One to ``SUPERVISOR_MAX_AGENTS`` tasks, never empty if ``tasks`` was not.
     """
-    # De-duplicate by agent, keeping the first task per agent (``seen.add`` returns None, so it only
-    # records the name; the ``or`` short-circuits to True for repeats).
+    # Keep the first task per agent (``seen.add`` returns None, so repeats short-circuit to True).
     seen: set[str] = set()
     unique = [t for t in tasks if not (t.agent in seen or seen.add(t.agent))]
-    # out_of_scope never runs alongside real agents; it is kept only when it is the sole task.
+
+    # out_of_scope survives only when it is the sole task.
     real = [t for t in unique if t.agent != OUT_OF_SCOPE]
     kept = (real or unique)[:SUPERVISOR_MAX_AGENTS]
     if len(kept) == 1:
         return [AgentTask(agent=kept[0].agent)]
-    # Several agents need a sub-query each; without one the agent would answer the whole message.
+
+    # Without a sub-query an agent would answer the whole message.
     return [t for t in kept if t.query] or [AgentTask(agent=kept[0].agent)]
 
 
@@ -193,23 +197,23 @@ def supervisor_node(state: AgentState) -> dict:
     Returns:
         dict: ``{"tasks": list[AgentTask], "results": [], "combine": bool, "turn_id": str}``.
     """
-    # Fresh id per turn: parallel branches use it to find the same SplitStream coordinator.
+    # Parallel branches use this id to find the turn's shared SplitStream.
     turn_id = uuid.uuid4().hex
-    # Cheap path first: a short follow-up skips the routing LLM call entirely.
+
+    # Cheap path first: a short follow-up skips the routing LLM call.
     sticky = _sticky_agent(state["messages"])
     if sticky:
         logger.info("node=supervisor status=sticky agent=%s", sticky)
         return {"tasks": [AgentTask(agent=sticky)], "results": [], "combine": False, "turn_id": turn_id}
-    # Structured output forces the model to answer in the SupervisorDecision schema (valid agent names only).
-    # It can still return None if the provider fails to produce a parsable object, handled just below.
+
+    # Structured output can still yield None when the provider returns nothing parsable (handled below).
     prompt = get_managed_prompt(SUPERVISOR_PROMPT_NAME, SUPERVISOR_CHAT_PROMPT, kind="chat")
     chain = prompt.chain(load_model("small").with_structured_output(SupervisorDecision))
     try:
         decision: SupervisorDecision | None = chain.invoke({"transcript": _render_transcript(state["messages"])})
     except BadRequestError as exc:
-        # Groq answers 400 "tool_use_failed" when the model replies in plain text instead of calling the decision
-        # tool, which is what it does when it refuses an abusive or injection-style message. That is a decline, not
-        # an outage: route to the fixed out-of-scope reply instead of failing the whole turn. Anything else re-raises.
+        # NOTE: Groq's 400 "tool_use_failed" means the model refused (plain text, no tool call).
+        # Treat it as a decline and route to out_of_scope; any other 400 re-raises.
         if "tool_use_failed" not in str(exc):
             raise
         logger.warning("node=supervisor status=model_refused fallback=%s", OUT_OF_SCOPE)
@@ -218,7 +222,8 @@ def supervisor_node(state: AgentState) -> dict:
         logger.warning("node=supervisor status=no_decision fallback=%s", DEFAULT_AGENT)
         return {"tasks": [AgentTask(agent=DEFAULT_AGENT)], "results": [], "combine": False, "turn_id": turn_id}
     tasks = normalise_tasks(decision.tasks)
-    # A composed answer only makes sense with 2+ agents; the model may set the flag on a single task.
+
+    # The model may flag a single task; composing needs 2+ answers.
     combine = decision.needs_combination and len(tasks) > 1
     logger.info(
         "node=supervisor agents=%s combine=%s reason=%s", ",".join(t.agent for t in tasks), combine, decision.reason
@@ -244,9 +249,7 @@ def route_to_agent(state: AgentState) -> list[Send]:
     Returns:
         list[Send]: One ``Send`` per task.
     """
-    # ``Send`` runs each target node with its own private payload (not the shared graph state), which is how
-    # parallel branches get different sub-queries; LangGraph executes all of them in the same superstep.
-    # Send class will return : Send(node_name, payload)
+    # ``Send(node_name, payload)`` gives each branch its own payload, so branches can hold different sub-queries.
     return [
         Send(
             t.agent,

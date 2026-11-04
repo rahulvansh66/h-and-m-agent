@@ -84,7 +84,7 @@ class _SseLoggingStream(httpx.AsyncByteStream):
         self._inner = inner
         self._url = url
         self._status = status
-        self._pending = ""  # text of an incomplete line carried over to the next network chunk
+        self._pending = ""  # incomplete line carried to the next chunk
 
     async def __aiter__(self):
         """Yield the original chunks, logging each complete ``data:`` line.
@@ -93,7 +93,7 @@ class _SseLoggingStream(httpx.AsyncByteStream):
             bytes: The unmodified body chunks.
         """
         async for chunk in self._inner:
-            # A network chunk can end mid-line: keep the unfinished tail in ``_pending`` and log only whole lines.
+            # A chunk can end mid-line, so the unfinished tail waits in ``_pending``.
             self._pending += chunk.decode("utf-8", "replace")
             *lines, self._pending = self._pending.split("\n")
             for line in lines:

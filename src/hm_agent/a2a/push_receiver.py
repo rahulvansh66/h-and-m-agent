@@ -130,12 +130,14 @@ class PushReceiver:
         Raises:
             RuntimeError: If the server did not come up within ``STARTUP_TIMEOUT_S`` seconds.
         """
-        # uvicorn runs in a daemon thread so the receiver never blocks interpreter exit.
         app = Starlette(routes=[Route(NOTIFY_PATH, self._handle, methods=["POST"])])
         self._server = uvicorn.Server(uvicorn.Config(app, host=A2A_HOST, port=self._port, log_level="warning", timeout_keep_alive=KEEP_ALIVE_S))
+
+        # Daemon thread: the receiver never blocks interpreter exit.
         self._thread = threading.Thread(target=self._server.run, name="a2a-push-receiver", daemon=True)
         self._thread.start()
-        # Poll until uvicorn reports it is listening, so callers can register webhooks right after start().
+
+        # Wait until it is listening so callers can register webhooks right after start().
         deadline = time.monotonic() + STARTUP_TIMEOUT_S
         while not self._server.started:
             if time.monotonic() > deadline or not self._thread.is_alive():
@@ -160,8 +162,9 @@ class PushReceiver:
             self._pending[task.task_id] = task
             early = self._finished_early.pop(task.task_id, None)
         logger.info("component=push_receiver status=registered task_id=%s agent=%s", task.task_id, task.agent)
+
+        # The agent finished before registration, so deliver now.
         if early is not None:
-            # The agent finished before the start call returned; deliver now.
             threading.Thread(target=self._finish, args=(task.task_id, early), daemon=True).start()
 
     def mark_streamed(self, task_id: str) -> None:
@@ -204,12 +207,13 @@ class PushReceiver:
         Returns:
             Response: 401 for a bad token, 400 for a non-JSON body, otherwise 200.
         """
-        # Constant-time comparison avoids leaking the shared token through response timing.
+        # SECURITY: constant-time compare, so response timing cannot leak the token.
         if not hmac.compare_digest(request.headers.get(TOKEN_HEADER, ""), self._token):
             logger.warning("component=push_receiver status=rejected reason=bad_token")
             return JSONResponse({"error": "invalid token"}, status_code=401)
         body = await request.body()
-        log_push_notification(str(request.url), body.decode("utf-8", "replace"))  # no-op unless A2A_WIRE_LOG is set
+        log_push_notification(str(request.url), body.decode("utf-8", "replace"))  # no-op unless enabled
+
         try:
             payload = json.loads(body)
         except ValueError:
@@ -219,12 +223,13 @@ class PushReceiver:
         if state in _TERMINAL_STATES:
             with self._changed:
                 known = task_id in self._pending
-                # Race: the agent can finish before register() runs. Park the state so register() delivers it.
-                # Tasks already claimed (delivered or streamed) are ignored.
+
+                # The agent may finish before register() runs; park the state for register() to deliver.
                 if not known and task_id not in self._claimed:
                     self._finished_early[task_id] = state
+
+            # _finish calls GetTask (blocking), so keep it off the event loop.
             if known:
-                # _finish does blocking I/O (GetTask), so keep it off the event loop.
                 await asyncio.to_thread(self._finish, task_id, state)
         return Response(status_code=200)
 
@@ -237,20 +242,24 @@ class PushReceiver:
         """
         with self._changed:
             task = self._pending.get(task_id)
+
+            # A task can be reported more than once; only the first claim delivers.
             if task is None or task_id in self._claimed:
-                return  # already delivered or in progress (a task can be reported more than once)
+                return
             self._claimed.add(task_id)
+
         try:
             text = FAILED_REPLY
+
+            # The notification only says "done"; the answer is read from the task itself.
             if state == COMPLETED_STATE:
-                # The notification only says "done"; the answer is read from the task itself.
                 text = task_reply(asyncio.run(fetch_task(task.url, task_id, A2A_TIMEOUT_S))) or FAILED_REPLY
             self._deliver(task, text)
             logger.info("component=push_receiver status=delivered task_id=%s state=%s", task_id, state)
         except Exception:
             logger.exception("component=push_receiver status=deliver_failed task_id=%s", task_id)
         finally:
-            # Always clear the task and wake ``wait_idle`` callers, even when delivery failed.
+            # Clear even on failure, so ``wait_idle`` callers are not stuck.
             with self._changed:
                 self._pending.pop(task_id, None)
                 self._changed.notify_all()

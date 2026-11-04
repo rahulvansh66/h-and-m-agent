@@ -1,20 +1,21 @@
 """MCP client: loads the order management tools from their MCP server as LangChain tools.
 
 Role in the system: bridge between the order_management agent and its MCP server
-(``hm_agent.order_management.mcp_server``). The ``customer_id`` hiding, injection and sync wrapping
+(``hm_agent.order_management.mcp_server``). The ``customer_id`` hiding, injection and session reuse
 are shared with the other agents (see ``hm_agent.core.mcp_tools``), so the LLM can never read another
 customer's data.
 """
 
-import asyncio
 import logging
 import os
 import sys
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from hm_agent.core.mcp_tools import hide_customer_id, inject_customer_id, make_sync
+from hm_agent.core.mcp_tools import inject_customer_id, open_mcp_tools
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,15 @@ ORDER_SERVER = "order_management"
 FORWARDED_ENV = ("NEON_POSTGRES_CONNECTION_STRING", "PYTHONPATH")  # PYTHONPATH: the container runs from /app/src
 
 
-def load_order_tools() -> list[BaseTool]:
-    """Load the order management tools from the MCP server.
+@asynccontextmanager
+async def order_tools() -> AsyncGenerator[list[BaseTool]]:
+    """Open one session to the order MCP server and yield its tools until exit.
 
-    Blocks while connecting once to list the tools. Afterwards the client starts the server as a
-    stdio subprocess for each tool call, so nothing stays running between calls.
+    The session starts the server as a stdio subprocess once and keeps it for the whole ``async with``,
+    so a tool call no longer pays a process start.
 
-    Returns:
-        list[BaseTool]: Sync-callable tools ``get_last_bought_product``, ``get_purchase_count``,
+    Yields:
+        list[BaseTool]: Async tools ``get_last_bought_product``, ``get_purchase_count``,
             ``list_orders`` and ``get_order_details``.
     """
     env = {key: os.environ[key] for key in FORWARDED_ENV if key in os.environ}
@@ -45,6 +47,6 @@ def load_order_tools() -> list[BaseTool]:
         },
         tool_interceptors=[inject_customer_id],
     )
-    tools = [make_sync(hide_customer_id(tool)) for tool in asyncio.run(client.get_tools())]
-    logger.info("component=mcp_client server=%s tools=%d", ORDER_SERVER, len(tools))
-    return tools
+    async with open_mcp_tools(client, ORDER_SERVER) as tools:
+        logger.info("component=mcp_client server=%s tools=%d", ORDER_SERVER, len(tools))
+        yield tools

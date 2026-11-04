@@ -91,8 +91,7 @@ def collect_results(old: list[AgentResult] | None, new: list[AgentResult] | None
     Returns:
         list[AgentResult]: The combined list, or an empty list on a clearing write.
     """
-    # Parallel branches each write their own list in the same step; the reducer merges them instead of
-    # letting one overwrite the other. An empty write is the explicit "reset" used between turns.
+    # Parallel branches write in the same step, so merge instead of overwrite. Empty means reset.
     if not new:
         return []
     return [*(old or []), *new]

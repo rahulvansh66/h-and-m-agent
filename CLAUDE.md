@@ -58,7 +58,36 @@ role in `config/` (not hardcoded in graph code) so they can be swapped and compa
 
 ## Code style
 
-Code should be clean, readable, structured and modular. Add comments to understand what code does.
+Code should be clean, readable, structured and modular. Comments follow the rules in "Comments" below.
+
+### Comments (non-docstring)
+
+Docstrings say what a unit does; comments say why the code is the way it is.
+
+1. **Explain why, not what.** Never restate the code. If a comment is needed to
+   follow *what* happens, rename or extract a function first.
+2. **Comment these, always:** concurrency and locking, security and ownership
+   checks, ordering that matters, workarounds, deliberate broad `except`, and
+   non-obvious data shapes (reducers, protocol events, SQL tricks).
+3. **Do not comment** obvious code, simple assignments, getters, or plain loops.
+4. **Placement.** Put the comment on its own line(s) directly above the code it
+   describes, with no blank line between them. Use a trailing `# ...` only for a
+   very short fact (about 6 words or fewer): a unit, a sentinel, or a tag like `# noqa`.
+5. **Length.** At most 3 lines per comment. Anything longer goes in the function or
+   class docstring, or into a well-named helper.
+6. **Spacing.** Leave a blank line before every commented block so each block reads
+   as a paragraph; do not stack commented blocks back to back.
+7. **Constants.** Say the unit or meaning of a magic value: `TIMEOUT_S = 600  # seconds`.
+8. **Markers.** Use `# NOTE:` for a trap the next editor must know, `# WARNING:` for
+   something that breaks if changed, and `# TODO(name): ...` with an owner. No bare TODOs.
+9. **Keep them in sync.** Update or delete a comment in the same edit that changes its
+   code. A stale comment is worse than none.
+10. **Never** leave commented-out code, change-history notes ("added for X", "old
+    logic"), or secrets, PII and local-only paths in comments.
+11. **Other file types.** SQL: a one-line header per non-trivial query (purpose, tables).
+    YAML/Terraform/Dockerfile: comment each non-default setting with its reason
+    (especially cost- or security-driven ones). Tests: name the behaviour in the test name
+    and comment only the non-obvious setup.
 
 ### Docstrings
 

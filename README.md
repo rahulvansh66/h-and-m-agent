@@ -37,8 +37,7 @@ flowchart LR
 | Guardrails | Amazon Bedrock Guardrails |
 | Tracing and prompts | Langfuse |
 | Evaluation | RAGAS, DeepEval, deterministic metrics |
-| Logging | Python `logging`, optional CloudWatch (`watchtower`) |
-| Tooling | Python 3.11+, uv, pytest |
+| Logging | Python `logging`, CloudWatch (`watchtower`) |
 
 
 ## Project layout

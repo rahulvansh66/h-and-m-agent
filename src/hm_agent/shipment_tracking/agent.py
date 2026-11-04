@@ -6,9 +6,10 @@ only step is the slow carrier lookup, streamed as progress lines. That keeps the
 calls and makes streaming and push notifications the only moving parts.
 """
 
+import asyncio
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 
 from hm_agent.a2a.chunks import Chunk, answer
 from hm_agent.shipment_tracking.tools import order_belongs_to_customer, stream_carrier_status
@@ -33,7 +34,7 @@ def find_order_id(text: str, history: list[dict]) -> str | None:
     Returns:
         str | None: Order id in upper case (e.g. ``ORD-1007``), or None if none was mentioned.
     """
-    # Search order: latest message first, then history newest to oldest; the first match wins.
+    # Latest message first, then history newest to oldest.
     for candidate in [text, *(m["text"] for m in reversed(history))]:
         match = ORDER_ID_PATTERN.search(candidate)
         if match:
@@ -41,7 +42,7 @@ def find_order_id(text: str, history: list[dict]) -> str | None:
     return None
 
 
-def shipment_runner(text: str, history: list[dict], customer_id: str, thread_id: str) -> Iterator[Chunk]:
+async def shipment_runner(text: str, history: list[dict], customer_id: str, thread_id: str) -> AsyncIterator[Chunk]:
     """Answer a shipment question: ask for an order id, or check the carrier and report.
 
     Args:
@@ -59,10 +60,11 @@ def shipment_runner(text: str, history: list[dict], customer_id: str, thread_id:
         logger.info("agent=shipment_tracking step=no_order_id thread_id=%s customer_id=%s", thread_id, customer_id)
         yield answer(ASK_FOR_ORDER_REPLY)
         return
-    if not order_belongs_to_customer(order_id, customer_id):
-        # Same reply for "unknown" and "someone else's", so it does not reveal that an order exists.
+    # Blocking DB query, so keep it off the event loop.
+    if not await asyncio.to_thread(order_belongs_to_customer, order_id, customer_id):
+        # SECURITY: the same reply for unknown and foreign orders hides which ids exist.
         logger.warning("agent=shipment_tracking step=order_not_owned thread_id=%s", thread_id)
         yield answer(ORDER_NOT_FOUND_REPLY)
         return
-    # Ownership verified: run the slow lookup, forwarding its progress lines and final status.
-    yield from stream_carrier_status(order_id)
+    async for chunk in stream_carrier_status(order_id):
+        yield chunk

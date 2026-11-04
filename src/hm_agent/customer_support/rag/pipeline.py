@@ -160,8 +160,7 @@ def generate_node(state: RagState) -> dict:
     start = time.perf_counter()
     result: CitedAnswer = chain.invoke({"context": context, "query": state["query"]})
 
-    # Guard against hallucinated citations: documents are numbered 1..N in the prompt, so any other
-    # number is invalid. A claim with no valid citation is unsupported and is discarded.
+    # Documents are numbered 1..N in the prompt, so any other citation is hallucinated; uncited claims are dropped.
     valid_ids = set(range(1, len(docs) + 1))
     claims = []
     for claim in result.claims:
@@ -206,7 +205,7 @@ def route_after_generate(state: RagState) -> Literal["rewrite_query", "finalize"
     Returns:
         Literal["rewrite_query", "finalize"]: Name of the next node.
     """
-    # Stop when we have an answer or the retry budget is spent (bounds LLM calls on the free tier).
+    # The retry cap bounds LLM calls on the free tier.
     if state["claims"] or state.get("retries", 0) >= RAG_MAX_RETRIES:
         return "finalize"
     return "rewrite_query"
@@ -228,9 +227,10 @@ def finalize_node(state: RagState) -> dict:
         logger.warning("node=finalize status=no_cited_claims retries=%d", state.get("retries", 0))
         return {"answer": NO_ANSWER}
 
-    # Body: each claim followed by its markers, e.g. "Returns take 14 days. [1][2]".
+    # Each claim is followed by its markers, e.g. "Returns take 14 days. [1][2]".
     body = " ".join(f"{c.text} {''.join(f'[{n}]' for n in c.citations)}" for c in claims)
-    # Source list: only documents actually cited, using the same numbers as the markers (1-based index).
+
+    # Only cited documents are listed, numbered to match the markers.
     cited = sorted({n for c in claims for n in c.citations})
     sources = "\n".join(
         f"[{n}] {state['documents'][n - 1]['doc_title']} "
@@ -255,6 +255,6 @@ def build_rag_graph() -> CompiledStateGraph:
     graph.add_edge(START, "retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_conditional_edges("generate", route_after_generate)
-    graph.add_edge("rewrite_query", "retrieve")  # the retry loop: rewrite, then search again
+    graph.add_edge("rewrite_query", "retrieve")  # the retry loop
     graph.add_edge("finalize", END)
     return graph.compile()

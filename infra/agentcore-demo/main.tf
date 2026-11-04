@@ -232,6 +232,11 @@ resource "aws_bedrockagentcore_oauth2_credential_provider" "gateway_to_mcp" {
 
 # ---- Runtimes --------------------------------------------------------------------------------------
 
+locals {
+  runtime_idle_timeout_s = 240 # 4 min: a session idle this long is terminated
+  runtime_max_lifetime_s = 900 # 15 min: hard cap on a session's microVM, busy or not
+}
+
 resource "aws_bedrockagentcore_agent_runtime" "mcp" {
   agent_runtime_name = "${local.rt_prefix}_order_mcp"
   description        = "Order MCP server"
@@ -263,6 +268,11 @@ resource "aws_bedrockagentcore_agent_runtime" "mcp" {
       allowed_clients = [aws_cognito_user_pool_client.gateway.id]
     }
   }
+  # Short idle timeout and lifetime keep Runtime cost low; a returning session just cold-starts a new microVM.
+  lifecycle_configuration = [{
+    idle_runtime_session_timeout = local.runtime_idle_timeout_s
+    max_lifetime                 = local.runtime_max_lifetime_s
+  }]
   environment_variables = {
     HOST                            = "0.0.0.0"
     PORT                            = "8000"
@@ -296,6 +306,11 @@ resource "aws_bedrockagentcore_agent_runtime" "shipment" {
     server_protocol = "A2A"
   }
   # No authorizer block = IAM (SigV4), the default.
+  # Short idle timeout and lifetime keep Runtime cost low; a returning session just cold-starts a new microVM.
+  lifecycle_configuration = [{
+    idle_runtime_session_timeout = local.runtime_idle_timeout_s
+    max_lifetime                 = local.runtime_max_lifetime_s
+  }]
   environment_variables = {
     HOST = "0.0.0.0"
     PORT = "9000"
@@ -326,6 +341,11 @@ resource "aws_bedrockagentcore_agent_runtime" "supervisor" {
   protocol_configuration {
     server_protocol = "HTTP"
   }
+  # Short idle timeout and lifetime keep Runtime cost low; a returning session just cold-starts a new microVM.
+  lifecycle_configuration = [{
+    idle_runtime_session_timeout = local.runtime_idle_timeout_s
+    max_lifetime                 = local.runtime_max_lifetime_s
+  }]
   environment_variables = {
     HOST             = "0.0.0.0"
     PORT             = "8080"

@@ -65,9 +65,9 @@ class CookieStore(AbstractDataStore):
             response.set_cookie(
                 self.cookie_name,
                 self.encrypt(identifier, data),
-                httponly=True,  # not readable from JavaScript
-                samesite="Lax",  # still sent on the redirect back from Auth0, but not on cross-site POSTs
-                # Secure cookies are skipped only for plain-http local development.
+                httponly=True,
+                samesite="Lax",
+                # Not Secure only on plain-http local development.
                 secure=not env.get("APP_BASE_URL", "").startswith("http://"),
                 max_age=self.max_age,
             )

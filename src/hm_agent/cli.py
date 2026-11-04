@@ -105,9 +105,10 @@ def _make_deliver(graph: CompiledStateGraph, interactive: bool) -> Callable[[Pen
         if interactive:
             print("\nyou> ", end="", flush=True)
         config: RunnableConfig = {"configurable": {"thread_id": task.thread_id, "customer_id": task.customer_id}}
+
         # Wait for a running turn to finish so its checkpoint does not overwrite this message.
         with _THREAD_LOCK:
-            # as_node makes the message look like it came from the agent's node, so no other node runs.
+            # ``as_node`` makes it look like the agent's own reply, so no other node runs.
             graph.update_state(config, {"messages": [AIMessage(text, name=task.agent)]}, as_node=task.agent)
 
     return deliver
@@ -117,6 +118,7 @@ def main() -> None:
     """CLI entry point: one query when given, otherwise a continuous chat in one thread."""
     load_dotenv(REPO_ROOT / ".env")
     configure_logging("cli")
+
     # Model replies can contain non-cp1252 characters (e.g. non-breaking hyphens) on Windows consoles.
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -136,6 +138,7 @@ def main() -> None:
         with neon_checkpointer() as checkpointer:
             graph = build_graph(checkpointer)
             interactive = args.query is None
+
             # Receives push notifications from agents with slow tasks and delivers their results.
             if push_receiver_enabled():
                 receiver = PushReceiver(A2A_WEBHOOK_PORT, _make_deliver(graph, interactive))
@@ -147,7 +150,6 @@ def main() -> None:
                     logger.warning("component=cli status=push_timeout wait_s=%d", PUSH_WAIT_S)
             else:
                 print(f"Chat started (thread_id: {thread_id}). Type 'exit' to quit.")
-                # Chat loop: Ctrl+C / Ctrl+D / an exit word end it; blank lines are ignored.
                 while True:
                     try:
                         query = input("\nyou> ").strip()
@@ -161,6 +163,7 @@ def main() -> None:
         if receiver is not None:
             set_receiver(None)
             receiver.stop()
+
         # Short-lived script: send queued trace events before the process exits.
         langfuse.flush()
     print(f"thread_id: {thread_id}")

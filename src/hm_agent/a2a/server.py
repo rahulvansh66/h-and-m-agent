@@ -2,7 +2,7 @@
 
 Role in the system: every agent service (order management, customer support, shipment tracking) is
 this wrapper around its own runner. It turns an incoming ``SendMessage`` into a Task, runs the
-runner off the event loop (LangGraph graphs and the MCP tool wrapper are blocking), and streams its
+async runner on the event loop, and streams its
 output through the task lifecycle: submitted -> working (progress messages) -> artifact chunks ->
 completed (or failed). Streaming clients see each event as it happens; blocking clients get the
 assembled task at the end.
@@ -11,7 +11,7 @@ assembled task at the end.
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 from a2a.helpers.proto_helpers import (
@@ -37,6 +37,7 @@ from langchain_core.runnables import RunnableConfig
 from langfuse import get_client
 from langgraph.graph.state import CompiledStateGraph
 from starlette.applications import Starlette
+from starlette.types import Lifespan
 
 from hm_agent.a2a.chunks import Chunk, answer, progress
 from hm_agent.auth import USER_TOKEN_METADATA_KEY, AuthError, verify_token
@@ -59,7 +60,7 @@ REJECTED_MESSAGE = "The agent could not process this request."  # generic on pur
 TOKEN_FLUSH_CHARS = 24  # LLM tokens are grouped into pieces of at least this size, one A2A event per piece
 
 # Runner signature: (latest user text, prior messages, customer_id, thread_id) -> stream of chunks.
-Runner = Callable[[str, list[dict], str, str], Iterator[Chunk]]
+Runner = Callable[[str, list[dict], str, str], AsyncIterator[Chunk]]
 
 
 def _score_run(agent: str, config: RunnableConfig, new_messages: list[AnyMessage], duration_s: float) -> None:
@@ -99,11 +100,11 @@ def graph_runner(
             the final reply (not for nodes whose output is validated or rewritten afterwards).
 
     Returns:
-        Runner: Generator function ``(text, history, customer_id, thread_id) -> Iterator[Chunk]``.
+        Runner: Async generator function ``(text, history, customer_id, thread_id) -> AsyncIterator[Chunk]``.
     """
     labels = progress_labels or {}
 
-    def run(text: str, history: list[dict], customer_id: str, thread_id: str) -> Iterator[Chunk]:
+    async def run(text: str, history: list[dict], customer_id: str, thread_id: str) -> AsyncIterator[Chunk]:
         """Stream the graph for one A2A request.
 
         Args:
@@ -115,32 +116,37 @@ def graph_runner(
         Yields:
             Chunk: Progress lines and answer pieces, in order.
         """
-        # The agent is stateless: the supervisor owns the conversation and sends the recent turns every call.
+        # The agent is stateless: the supervisor sends the recent turns on every call.
         messages: list[AnyMessage] = [
             HumanMessage(m["text"]) if m["role"] == "user" else AIMessage(m["text"], name=m.get("name"))
             for m in history
         ]
         messages.append(HumanMessage(text))
-        # Join the supervisor's trace when it sent one, so a turn is one trace across supervisor and agents.
+
+        # Joining the supervisor's trace makes one turn a single trace across services.
         trace_id = incoming_trace_id.get() or None
         if trace_id:
             trace_id_var.set(trace_id)
         config: RunnableConfig = build_langfuse_config(
             customer_id, thread_id, f"a2a-{agent}", extra_tags=[f"a2a-{agent}"], trace_id=trace_id
         )
-        # buffer: tokens not yet sent. streamed: any answer chunk already sent. final_text: fallback reply
-        # taken from the finished graph state when no tokens were streamed.
+
+        # ``final_text`` is the fallback reply when no tokens were streamed.
         buffer, streamed, final_text = "", False, ""
-        final_messages: list[AnyMessage] = []  # full message list of the finished run, for tool-call scoring
+        final_messages: list[AnyMessage] = []  # used for tool-call scoring
         run_start = time.perf_counter()
         try:
-            for mode, data in graph.stream({"messages": messages}, config, stream_mode=["messages", "updates", "values"]):
+            async for mode, data in graph.astream(
+                {"messages": messages}, config, stream_mode=["messages", "updates", "values"]
+            ):
                 if mode == "messages":
                     token, _meta = data
-                    # Only plain model text; tool-call fragments are not part of the reply.
+
+                    # Tool-call fragments are not part of the reply, so only plain text is kept.
                     if stream_tokens and isinstance(token, AIMessageChunk) and token.text and not token.tool_call_chunks:
                         buffer += token.text
-                        # Batch tiny tokens: one A2A event per token would flood the wire.
+
+                        # Batching avoids one A2A event per token.
                         if len(buffer) >= TOKEN_FLUSH_CHARS:
                             yield answer(buffer)
                             buffer, streamed = "", True
@@ -156,23 +162,46 @@ def graph_runner(
                 streamed = True
             if not streamed:
                 yield answer(final_text)
-            _score_run(agent, config, final_messages[len(messages):], time.perf_counter() - run_start)
+            await asyncio.to_thread(
+                _score_run, agent, config, final_messages[len(messages):], time.perf_counter() - run_start
+            )
         finally:
-            # Each request is its own short trace; send it before replying so it is not lost on shutdown.
-            get_client().flush()
+            # Flush now: each request is a short trace that could be lost on shutdown.
+            # The flush is a blocking network call, so keep it off the event loop.
+            await asyncio.to_thread(get_client().flush)
+
+    return run
+
+
+def deferred_runner(get_runner: Callable[[], Runner]) -> Runner:
+    """Wrap a runner that does not exist yet, so the app can be built before the service's lifespan runs.
+
+    The agent's MCP session (and so its graph) is only created when the server starts, but the app is
+    built earlier. The real runner is looked up on every request.
+
+    Args:
+        get_runner (Callable[[], Runner]): Returns the live runner; raises if the service is not started.
+
+    Returns:
+        Runner: Async generator function that forwards each request to ``get_runner()``.
+    """
+
+    async def run(text: str, history: list[dict], customer_id: str, thread_id: str) -> AsyncIterator[Chunk]:
+        async for chunk in get_runner()(text, history, customer_id, thread_id):
+            yield chunk
 
     return run
 
 
 class RunnerExecutor(AgentExecutor):
-    """A2A executor that streams the chunks of a blocking ``Runner`` as task events."""
+    """A2A executor that streams the chunks of an async ``Runner`` as task events."""
 
     def __init__(self, agent: str, runner: Runner) -> None:
         """Store the agent name and runner.
 
         Args:
             agent (str): Agent name, used in log fields.
-            runner (Runner): Generator function that produces the reply as chunks.
+            runner (Runner): Async generator function that produces the reply as chunks.
         """
         self._agent = agent
         self._runner = runner
@@ -181,8 +210,8 @@ class RunnerExecutor(AgentExecutor):
         """Run one task: publish submitted/working, stream the runner's chunks, then complete.
 
         Reads the customer id and thread id from the request metadata and the prior messages from
-        the first data part of the message. The runner is blocking, so it runs on a worker thread
-        and hands its chunks to the event loop through a queue. A ``progress`` chunk becomes a
+        the first data part of the message. The runner is an async generator iterated on the event
+        loop. A ``progress`` chunk becomes a
         ``working`` status update with a message; ``answer`` chunks become appends to one artifact,
         the last of them flagged ``last_chunk``. A runner failure marks the task ``failed``.
 
@@ -195,22 +224,23 @@ class RunnerExecutor(AgentExecutor):
             event_queue (EventQueue): Queue the task events are published to.
         """
         task_id, context_id = context.task_id, context.context_id
-        # TaskUpdater publishes the lifecycle events (working, artifact, completed/failed) to the queue.
         updater = TaskUpdater(event_queue, task_id, context_id)
+
+        # The first event of a task must be the Task itself (state submitted).
         if context.current_task is None:
-            # First event of a task must be the Task itself (state submitted).
             await event_queue.enqueue_event(new_task_from_user_message(context.message))
         await updater.start_work()
 
-        # The message has a text part (latest question) and a data part (prior turns), see the client.
+        # Text part = latest question; data part = prior turns (see the client).
         text = context.get_user_input()
         data = get_data_parts(context.message.parts)
         history = data[0].get("history", []) if data else []
         customer_id = context.metadata.get("customer_id", "")
         thread_id = context.metadata.get("thread_id", context_id)
         trace_id = context.metadata.get(TRACE_ID_METADATA_KEY, "")
+
+        # SECURITY: the claimed customer_id is replaced by the one proven by the token.
         if auth_enabled():
-            # Never trust the claimed customer_id on its own: replace it with the one proven by the token.
             verified = await self._verify_customer(context, customer_id, task_id)
             if verified is None:
                 await updater.failed(new_text_message(REJECTED_MESSAGE))
@@ -221,22 +251,10 @@ class RunnerExecutor(AgentExecutor):
             self._agent, task_id, context_id, customer_id, len(history),
         )
         start = time.perf_counter()
-        loop = asyncio.get_running_loop()
-        outbox: asyncio.Queue[Chunk | Exception | None] = asyncio.Queue()
 
-        def produce() -> None:
-            """Worker thread: iterate the runner and hand each chunk to the event loop."""
-            incoming_trace_id.set(trace_id)  # read by the runner to join the supervisor's trace
-            try:
-                for chunk in self._runner(text, history, customer_id, thread_id):
-                    loop.call_soon_threadsafe(outbox.put_nowait, chunk)
-            except Exception as exc:  # reported to the task below
-                loop.call_soon_threadsafe(outbox.put_nowait, exc)
-            finally:
-                loop.call_soon_threadsafe(outbox.put_nowait, None)  # end marker
-
-        worker = asyncio.create_task(asyncio.to_thread(produce))
-        held: Chunk | None = None  # newest answer chunk, held back until we know whether it is the last
+        # Same task as the runner, so the ContextVar is visible to it without copying.
+        incoming_trace_id.set(trace_id)
+        held: Chunk | None = None  # newest answer chunk, not yet sent
         sent_answer, events, reply_chars = False, 0, 0
 
         async def flush(last: bool) -> None:
@@ -253,25 +271,24 @@ class RunnerExecutor(AgentExecutor):
             )
             sent_answer, reply_chars, held = True, reply_chars + len(held.text), None
 
-        # Consume until the end marker (None). Progress goes out at once; answer chunks are held one step
-        # back, because only when the next item arrives (or the stream ends) do we know if a chunk was the last.
-        while (item := await outbox.get()) is not None:
-            if isinstance(item, Exception):
-                await worker
-                logger.error(
-                    "agent=%s status=failed task_id=%s context_id=%s error=%s",
-                    self._agent, task_id, context_id, type(item).__name__,
-                )
-                # Generic text on purpose: internal error details are only in the server log.
-                await updater.failed(new_text_message(REJECTED_MESSAGE))
-                return
-            events += 1
-            if item.kind == "progress":
-                await updater.update_status(TaskState.TASK_STATE_WORKING, new_text_message(item.text))
-            else:
-                await flush(last=False)
-                held = item
-        await worker
+        # Progress goes out at once; an answer chunk waits one step, since only the next item shows it was not last.
+        try:
+            async for item in self._runner(text, history, customer_id, thread_id):
+                events += 1
+                if item.kind == "progress":
+                    await updater.update_status(TaskState.TASK_STATE_WORKING, new_text_message(item.text))
+                else:
+                    await flush(last=False)
+                    held = item
+        except Exception as exc:  # reported to the task, never to the caller
+            logger.error(
+                "agent=%s status=failed task_id=%s context_id=%s error=%s",
+                self._agent, task_id, context_id, type(exc).__name__,
+            )
+
+            # Generic text on purpose; details stay in the server log.
+            await updater.failed(new_text_message(REJECTED_MESSAGE))
+            return
         await flush(last=True)
         await updater.complete()
         logger.info(
@@ -293,7 +310,7 @@ class RunnerExecutor(AgentExecutor):
         """
         token = context.metadata.get(USER_TOKEN_METADATA_KEY, "")
         try:
-            # The first call may fetch the signing keys over the network, so keep it off the event loop.
+            # The first call may fetch signing keys over the network, so keep it off the event loop.
             verified = await asyncio.to_thread(verify_token, token)
         except AuthError as exc:
             logger.warning("agent=%s status=auth_rejected task_id=%s reason=%s", self._agent, task_id, exc.reason)
@@ -313,13 +330,15 @@ class RunnerExecutor(AgentExecutor):
         await TaskUpdater(event_queue, context.task_id, context.context_id).cancel()
 
 
-def build_a2a_app(card: AgentCard, agent: str, runner: Runner) -> Starlette:
+def build_a2a_app(card: AgentCard, agent: str, runner: Runner, lifespan: Lifespan[Starlette] | None = None) -> Starlette:
     """Build the ASGI app that serves an agent over A2A (JSON-RPC plus the Agent Card).
 
     Args:
         card (AgentCard): Card served at ``/.well-known/agent-card.json``.
         agent (str): Agent name, used in log fields.
-        runner (Runner): Generator function that produces the reply as chunks.
+        runner (Runner): Async generator function that produces the reply as chunks.
+        lifespan (Lifespan[Starlette] | None): Startup/shutdown context run on the server's event loop,
+            used to hold resources (such as an MCP session) open while the app serves.
 
     Returns:
         Starlette: App to pass to ``uvicorn.run``. Tasks and push configs are kept in memory, so
@@ -327,8 +346,7 @@ def build_a2a_app(card: AgentCard, agent: str, runner: Runner) -> Starlette:
     """
     push_kwargs = {}
     if card.capabilities.push_notifications:
-        # The caller registers a webhook per task (SendMessage configuration); the sender POSTs
-        # every status/artifact update of that task to it.
+        # The caller registers a webhook per task; the sender POSTs every update to it.
         push_store = InMemoryPushNotificationConfigStore()
         push_kwargs = {
             "push_config_store": push_store,
@@ -344,4 +362,4 @@ def build_a2a_app(card: AgentCard, agent: str, runner: Runner) -> Starlette:
         *create_agent_card_routes(card, card_url=AGENT_CARD_WELL_KNOWN_PATH),
         *create_jsonrpc_routes(handler, rpc_url=RPC_PATH),
     ]
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, lifespan=lifespan)
